@@ -1,7 +1,6 @@
 [jobs.build]
 command = ["cargo", "build"]
 need_stdout = false
-allow_warnings = true
 
 [jobs.check]
 command = ["cargo", "check"]
