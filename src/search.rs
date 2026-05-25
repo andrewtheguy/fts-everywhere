@@ -76,7 +76,14 @@ pub fn index_path(tantivy_index_path: &str, aws_endpoint_url: &str, s3_bucket_na
 
 pub fn open_or_create_index(path: &Path, schema: &Schema) -> anyhow::Result<Index> {
     let index = if path.exists() {
-        Index::open_in_dir(path).context("failed to open existing index")?
+        let index = Index::open_in_dir(path).context("failed to open existing index")?;
+        if index.schema() != *schema {
+            bail!(
+                "index schema mismatch at {path} — delete the index directory and re-run",
+                path = path.display(),
+            );
+        }
+        index
     } else {
         std::fs::create_dir_all(path).context("failed to create index directory")?;
         Index::create_in_dir(path, schema.clone()).context("failed to create new index")?
