@@ -39,6 +39,8 @@ const TEXT_APP_TYPES: &[&str] = &[
     "application/sql",
 ];
 
+const STORE_READER_CACHE_NUM_BLOCKS: usize = 0;
+
 fn is_text_by_name(key: &str) -> bool {
     let path = Path::new(key);
 
@@ -72,7 +74,7 @@ fn load_existing_index(index: &tantivy::Index, schema: &search::SearchSchema) ->
     let mut existing = HashMap::new();
 
     for segment_reader in searcher.segment_readers() {
-        let store_reader = match segment_reader.get_store_reader(0) {
+        let store_reader = match segment_reader.get_store_reader(STORE_READER_CACHE_NUM_BLOCKS) {
             Ok(r) => r,
             Err(_) => continue,
         };
