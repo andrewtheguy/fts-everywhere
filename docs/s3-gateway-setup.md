@@ -50,38 +50,25 @@ rclone serve s3 \
 
 Like VersityGW, rclone treats subdirectories under the root as buckets and ignores files in the root. If you serve `/data` and your files are in `/data/documents`, the bucket name is `documents`.
 
-## 2. Set up a hostname for the gateway
-
-MiniSearch requires the endpoint URL to use a hostname, not an IP address. Using `http://127.0.0.1:7070` will fail with:
-
-```
-AWS_ENDPOINT_URL host must be a hostname, not an IP address
-```
-
-Add a hostname alias to `/etc/hosts`:
-
-```
-127.0.0.1  versitygw.local
-```
-
-Then use `http://versitygw.local:7070` as the endpoint URL. `localhost` also works if VersityGW is on the same machine.
-
-## 3. Configure MiniSearch
+## 2. Configure MiniSearch
 
 Create a `config.toml`:
 
 ```toml
+[[profiles]]
+name = "documents"
+description = "Local documents via S3 gateway"
 aws_access_key_id = "myaccesskey"
 aws_secret_access_key = "mysecretkey"
 aws_region = "us-east-1"
-aws_endpoint_url = "http://versitygw.local:7070"
+aws_endpoint_url = "http://127.0.0.1:7070"
 s3_bucket_name = "documents"
-tantivy_index_path = "./tantivy_index"
+tantivy_index_path = "./tantivy_index/documents"
 ```
 
 `aws_region` is required but not meaningful for a local gateway — any valid region string works.
 
-## 4. Index and serve
+## 3. Index and serve
 
 ```bash
 # Build the search index
@@ -91,7 +78,7 @@ minisearch -c config.toml index
 minisearch -c config.toml serve
 ```
 
-Open http://localhost:3000 to search your files.
+Open http://localhost:52378 to search your files.
 
 ## Security notes
 
@@ -104,7 +91,6 @@ Open http://localhost:3000 to search your files.
 
 | Error | Cause | Fix |
 |---|---|---|
-| `AWS_ENDPOINT_URL host must be a hostname, not an IP address` | Endpoint URL uses an IP like `127.0.0.1` | Use a hostname — add an `/etc/hosts` entry or use `localhost` |
-| `failed to list S3 objects` | Gateway not running or bucket does not exist | Verify VersityGW is running and the subdirectory matching your bucket name exists |
+| `failed to list S3 objects` | Gateway not running or bucket does not exist | Verify the gateway is running and the subdirectory matching your bucket name exists |
 | `search index not available` (503) | Index not built yet | Run `minisearch -c config.toml index` before serving |
-| Presigned URLs return errors in the browser | Gateway not reachable from the browser | Ensure the endpoint URL hostname resolves on the client machine |
+| Presigned URLs return errors in the browser | Gateway not reachable from the browser | Ensure the endpoint URL is reachable from the client machine |

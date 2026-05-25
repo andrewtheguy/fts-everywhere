@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use log::{debug, info, warn};
@@ -90,12 +90,13 @@ fn lookup_last_modified(
         .map(|s| s.to_string())
 }
 
-pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()> {
-    let s3_client = config.s3_client().await;
+pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Result<()> {
+    info!("indexing profile: {}", profile.name);
+    let s3_client = profile.s3_client().await;
 
     let search_schema = search::build_schema();
-    let search::IndexPathResult { path: index_path, bucket: bucket_name } =
-        search::index_path(&config.tantivy_index_path, &config.aws_endpoint_url, &config.s3_bucket_name)?;
+    let index_path = PathBuf::from(&profile.tantivy_index_path);
+    let bucket_name = &profile.s3_bucket_name;
     let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
 
     let lookup_searcher = index.reader().ok().map(|r| r.searcher());
@@ -113,7 +114,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
     let mut continuation_token: Option<String> = None;
 
     loop {
-        let mut req = s3_client.list_objects_v2().bucket(&bucket_name);
+        let mut req = s3_client.list_objects_v2().bucket(bucket_name);
         if let Some(token) = &continuation_token {
             req = req.continuation_token(token);
         }
@@ -151,7 +152,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
             } else {
                 match s3_client
                     .head_object()
-                    .bucket(&bucket_name)
+                    .bucket(bucket_name)
                     .key(&key)
                     .send()
                     .await
@@ -179,7 +180,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
 
                 let body = match s3_client
                     .get_object()
-                    .bucket(&bucket_name)
+                    .bucket(bucket_name)
                     .key(&key)
                     .send()
                     .await

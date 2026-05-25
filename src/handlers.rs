@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use aws_sdk_s3::presigning::PresigningConfig;
-use axum::{extract::Query, extract::State, Json};
+use axum::extract::{Path, Query, State};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, TermQuery};
@@ -14,7 +15,7 @@ use tantivy::{TantivyDocument, Term};
 
 use crate::error::AppError;
 use crate::search;
-use crate::state::{AppState, SearchState};
+use crate::state::{AppState, ProfileState, SearchState};
 
 #[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -60,7 +61,7 @@ pub struct SearchSnippetSegment {
     pub end: usize,
 }
 
-fn get_or_init_search(state: &AppState) -> Result<SearchState, AppError> {
+fn get_or_init_search(state: &ProfileState) -> Result<SearchState, AppError> {
     {
         let guard = state.search.read().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = guard.as_ref() {
@@ -83,16 +84,42 @@ fn get_or_init_search(state: &AppState) -> Result<SearchState, AppError> {
     Ok(search_state)
 }
 
+#[derive(Serialize)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub description: String,
+}
+
+pub async fn profiles(
+    State(state): State<AppState>,
+) -> Json<Vec<ProfileInfo>> {
+    Json(
+        state
+            .profiles
+            .iter()
+            .map(|p| ProfileInfo {
+                name: p.name.clone(),
+                description: p.description.clone(),
+            })
+            .collect(),
+    )
+}
+
 pub async fn search(
     State(state): State<AppState>,
+    Path(profile_name): Path<String>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
+    let profile = state
+        .get_profile(&profile_name)
+        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+
     let query_str = params
         .q
         .filter(|q| !q.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'q'"))?;
 
-    let search_state = get_or_init_search(&state)?;
+    let search_state = get_or_init_search(&profile.state)?;
     let schema = &search_state.schema;
     let reader = &search_state.reader;
 
@@ -453,8 +480,13 @@ pub struct PresignParams {
 
 pub async fn presign(
     State(state): State<AppState>,
+    Path(profile_name): Path<String>,
     Query(params): Query<PresignParams>,
 ) -> Result<axum::response::Redirect, AppError> {
+    let profile = state
+        .get_profile(&profile_name)
+        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+
     let key = params
         .key
         .filter(|k| !k.trim().is_empty())
@@ -470,10 +502,11 @@ pub async fn presign(
     let presign_config = PresigningConfig::expires_in(Duration::from_secs(3600))
         .context("presign config error")?;
 
-    let presigned = state
+    let presigned = profile
+        .state
         .s3_client
         .get_object()
-        .bucket(&state.bucket_name)
+        .bucket(&profile.state.bucket_name)
         .key(&key)
         .response_content_type(&content_type)
         .response_content_disposition("inline")

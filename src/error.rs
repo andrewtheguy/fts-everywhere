@@ -8,6 +8,9 @@ pub enum AppError {
     BadRequest(String),
 
     #[error("{0}")]
+    NotFound(String),
+
+    #[error("{0}")]
     ServiceUnavailable(String),
 
     #[error(transparent)]
@@ -19,6 +22,10 @@ impl AppError {
         Self::BadRequest(msg.into())
     }
 
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self::NotFound(msg.into())
+    }
+
     pub fn unavailable(msg: impl Into<String>) -> Self {
         Self::ServiceUnavailable(msg.into())
     }
@@ -28,6 +35,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             AppError::Internal(err) => {
                 error!("internal error: {err:#}");

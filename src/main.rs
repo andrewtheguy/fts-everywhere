@@ -7,6 +7,7 @@ mod indexer;
 mod search;
 mod state;
 
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
@@ -14,7 +15,7 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use cli::{Cli, Commands};
 use log::{info, warn};
-use state::{AppState, SearchState};
+use state::{AppState, ProfileEntry, ProfileState, SearchState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,49 +25,78 @@ async fn main() -> anyhow::Result<()> {
     let config = config::AppConfig::load(&cli.config)?;
 
     match cli.command {
-        Commands::Index => {
-            indexer::run_indexer(&config).await?;
+        Commands::Index { profile: profile_name } => {
+            let profiles_to_index: Vec<&config::ProfileConfig> = match &profile_name {
+                Some(name) => {
+                    let p = config
+                        .profiles
+                        .iter()
+                        .find(|p| p.name == *name)
+                        .with_context(|| format!("profile not found: {name}"))?;
+                    vec![p]
+                }
+                None => config.profiles.iter().collect(),
+            };
+            for profile in profiles_to_index {
+                indexer::run_indexer(profile).await?;
+            }
         }
         Commands::Serve => {
-            let s3_client = config.s3_client().await;
+            let mut profiles = Vec::new();
+            for profile_config in &config.profiles {
+                let s3_client = profile_config.s3_client().await;
+                let index_path = PathBuf::from(&profile_config.tantivy_index_path);
+                let search = match search::open_index(&index_path) {
+                    Some(index) => {
+                        let reader = index
+                            .reader()
+                            .context("failed to create index reader")?;
+                        let schema = search::build_schema();
+                        Arc::new(RwLock::new(Some(SearchState { reader, schema })))
+                    }
+                    None => {
+                        warn!(
+                            "search index not found at {index_path:?} for profile '{}' — search will be unavailable until index is created",
+                            profile_config.name
+                        );
+                        Arc::new(RwLock::new(None))
+                    }
+                };
+                profiles.push(ProfileEntry {
+                    name: profile_config.name.clone(),
+                    description: profile_config.description.clone(),
+                    state: ProfileState {
+                        s3_client,
+                        bucket_name: profile_config.s3_bucket_name.clone(),
+                        index_path,
+                        search,
+                    },
+                });
+            }
 
-            let search::IndexPathResult { path: index_path, bucket: bucket_name } =
-                search::index_path(&config.tantivy_index_path, &config.aws_endpoint_url, &config.s3_bucket_name)?;
-            let search = match search::open_index(&index_path) {
-                Some(index) => {
-                    let reader = index
-                        .reader()
-                        .context("failed to create index reader")?;
-                    let schema = search::build_schema();
-                    Arc::new(RwLock::new(Some(SearchState { reader, schema })))
-                }
-                None => {
-                    warn!("search index not found at {index_path:?} — search will be unavailable until index is created");
-                    Arc::new(RwLock::new(None))
-                }
-            };
-
-            let state = AppState {
-                s3_client,
-                bucket_name,
-                index_path,
-                search,
-            };
+            let state = AppState { profiles };
 
             let app = Router::new()
                 .route("/api/health", get(|| async { "ok" }))
-                .route("/api/search", get(handlers::search))
-                .route("/api/presign", get(handlers::presign))
+                .route("/api/profiles", get(handlers::profiles))
+                .route("/api/p/{profile}/search", get(handlers::search))
+                .route("/api/p/{profile}/presign", get(handlers::presign))
                 .with_state(state)
                 .fallback(assets::static_handler);
 
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            let listener_v6 = tokio::net::TcpListener::bind("[::1]:52378")
                 .await
-                .context("failed to bind to port 3000")?;
-            info!("listening on http://localhost:3000");
-            axum::serve(listener, app)
+                .context("failed to bind to [::1]:52378")?;
+            let listener_v4 = tokio::net::TcpListener::bind("127.0.0.1:52378")
                 .await
-                .context("server error")?;
+                .context("failed to bind to 127.0.0.1:52378")?;
+            info!("listening on http://localhost:52378");
+
+            let app_clone = app.clone();
+            tokio::spawn(async move {
+                axum::serve(listener_v6, app_clone).await.ok();
+            });
+            axum::serve(listener_v4, app).await.context("server error")?;
         }
     }
     Ok(())

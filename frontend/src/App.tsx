@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Link, Route, Routes, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +29,11 @@ interface SearchResponse {
   results: SearchResult[];
 }
 
+interface ProfileInfo {
+  name: string;
+  description: string;
+}
+
 type SearchMode = "both" | "filename" | "content";
 
 function formatBytes(bytes: number): string {
@@ -36,24 +42,6 @@ function formatBytes(bytes: number): string {
   const sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
-}
-
-function getInitialQuery(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("q") || "";
-}
-
-function getInitialPage(): number {
-  const params = new URLSearchParams(window.location.search);
-  const p = Number.parseInt(params.get("page") || "1", 10);
-  return p >= 1 ? p : 1;
-}
-
-function getInitialMode(): SearchMode {
-  const params = new URLSearchParams(window.location.search);
-  const m = params.get("mode");
-  if (m === "filename" || m === "content") return m;
-  return "both";
 }
 
 const EXT_PRESETS: Record<string, string> = {
@@ -84,11 +72,6 @@ function matchPreset(ext: string): string {
   return "custom";
 }
 
-function getInitialExt(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("ext") || "";
-}
-
 function getPageNumbers(current: number, total: number): (number | "ellipsis")[] {
   if (total <= 7) {
     return Array.from({ length: total }, (_, i) => i + 1);
@@ -103,91 +86,140 @@ function getPageNumbers(current: number, total: number): (number | "ellipsis")[]
   return pages;
 }
 
-function App() {
-  const [query, setQuery] = useState(getInitialQuery);
+function ProfileList() {
+  const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/profiles")
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<ProfileInfo[]>;
+      })
+      .then(setProfiles)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-8">
+      <h1 className="text-3xl font-bold tracking-tight mb-6">MiniSearch</h1>
+
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertDescription>Error: {error}</AlertDescription>
+        </Alert>
+      )}
+
+      {profiles === null && !error && <p className="text-muted-foreground">Loading profiles...</p>}
+
+      {profiles && (
+        <div className="space-y-3">
+          {profiles.map((profile) => (
+            <Link key={profile.name} to={`/p/${profile.name}`} className="block">
+              <Card className="hover:border-primary/50 transition-colors">
+                <CardContent>
+                  <h2 className="text-lg font-semibold">{profile.name}</h2>
+                  {profile.description && (
+                    <p className="text-sm text-muted-foreground mt-1">{profile.description}</p>
+                  )}
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SearchView() {
+  const { profileName } = useParams<{ profileName: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [query, setQuery] = useState(() => searchParams.get("q") || "");
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [page, setPage] = useState(getInitialPage);
+  const [page, setPage] = useState(() => {
+    const p = Number.parseInt(searchParams.get("page") || "1", 10);
+    return p >= 1 ? p : 1;
+  });
   const [totalPages, setTotalPages] = useState(0);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<SearchMode>(getInitialMode);
-  const [ext, setExt] = useState(getInitialExt);
-  const [extPreset, setExtPreset] = useState(() => matchPreset(getInitialExt()));
+  const [mode, setMode] = useState<SearchMode>(() => {
+    const m = searchParams.get("mode");
+    if (m === "filename" || m === "content") return m;
+    return "both";
+  });
+  const [ext, setExt] = useState(() => searchParams.get("ext") || "");
+  const [extPreset, setExtPreset] = useState(() => matchPreset(searchParams.get("ext") || ""));
   const currentSearchController = useRef<AbortController | null>(null);
 
-  const doSearch = useCallback((q: string, p: number, m: SearchMode, e: string) => {
-    currentSearchController.current?.abort();
-    const controller = new AbortController();
-    currentSearchController.current = controller;
+  const doSearch = useCallback(
+    (q: string, p: number, m: SearchMode, e: string) => {
+      currentSearchController.current?.abort();
+      const controller = new AbortController();
+      currentSearchController.current = controller;
 
-    setSearching(true);
-    setError(null);
+      setSearching(true);
+      setError(null);
 
-    const params = new URLSearchParams({ q });
-    if (p > 1) params.set("page", String(p));
-    if (m !== "both") params.set("mode", m);
-    if (e.trim()) params.set("ext", e.trim());
+      const params = new URLSearchParams({ q });
+      if (p > 1) params.set("page", String(p));
+      if (m !== "both") params.set("mode", m);
+      if (e.trim()) params.set("ext", e.trim());
 
-    fetch(`/api/search?${params}`, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<SearchResponse>;
-      })
-      .then((data) => {
-        if (currentSearchController.current !== controller) return;
-        setResults(data.results);
-        setTotalCount(data.count);
-
-        setTotalPages(data.total_pages);
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        if (currentSearchController.current === controller) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      })
-      .finally(() => {
-        if (currentSearchController.current === controller) {
-          currentSearchController.current = null;
-          setSearching(false);
-        }
-      });
-  }, []);
+      fetch(`/api/p/${profileName}/search?${params}`, { signal: controller.signal })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json() as Promise<SearchResponse>;
+        })
+        .then((data) => {
+          if (currentSearchController.current !== controller) return;
+          setResults(data.results);
+          setTotalCount(data.count);
+          setTotalPages(data.total_pages);
+        })
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          if (currentSearchController.current === controller) {
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        })
+        .finally(() => {
+          if (currentSearchController.current === controller) {
+            currentSearchController.current = null;
+            setSearching(false);
+          }
+        });
+    },
+    [profileName],
+  );
 
   useEffect(() => {
-    const initialQuery = getInitialQuery();
-    const initialPage = getInitialPage();
+    const initialQuery = searchParams.get("q") || "";
     if (initialQuery) {
-      doSearch(initialQuery, initialPage, getInitialMode(), getInitialExt());
+      const initialPage = Number.parseInt(searchParams.get("page") || "1", 10);
+      const m = searchParams.get("mode");
+      const initialMode: SearchMode = m === "filename" || m === "content" ? m : "both";
+      const initialExt = searchParams.get("ext") || "";
+      doSearch(initialQuery, initialPage >= 1 ? initialPage : 1, initialMode, initialExt);
     }
 
-    function handlePopstate() {
-      const q = getInitialQuery();
-      const p = getInitialPage();
-      const m = getInitialMode();
-      const e = getInitialExt();
-      setQuery(q);
-      setPage(p);
-      setMode(m);
-      setExt(e);
-      setExtPreset(matchPreset(e));
-      if (q) {
-        doSearch(q, p, m, e);
-      } else {
-        setResults(null);
-        setTotalCount(null);
-        setTotalPages(0);
-      }
-    }
-
-    window.addEventListener("popstate", handlePopstate);
     return () => {
-      window.removeEventListener("popstate", handlePopstate);
       currentSearchController.current?.abort();
       currentSearchController.current = null;
     };
-  }, [doSearch]);
+  }, [doSearch, searchParams]);
+
+  function updateSearchParams(q: string, p: number, m: SearchMode, e: string) {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set("q", q.trim());
+    if (p > 1) params.set("page", String(p));
+    if (m !== "both") params.set("mode", m);
+    if (e.trim()) params.set("ext", e.trim());
+    setSearchParams(params);
+  }
 
   function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -195,47 +227,13 @@ function App() {
     if (!q) return;
 
     setPage(1);
-    const url = new URL(window.location.href);
-    url.searchParams.set("q", q);
-    url.searchParams.delete("page");
-    if (mode !== "both") {
-      url.searchParams.set("mode", mode);
-    } else {
-      url.searchParams.delete("mode");
-    }
-    if (ext.trim()) {
-      url.searchParams.set("ext", ext.trim());
-    } else {
-      url.searchParams.delete("ext");
-    }
-    window.history.pushState(null, "", url.toString());
-
-    doSearch(q, 1, mode, ext);
+    updateSearchParams(q, 1, mode, ext);
   }
 
   function handlePageChange(newPage: number) {
     setPage(newPage);
     window.scrollTo({ top: 0, behavior: "smooth" });
-
-    const url = new URL(window.location.href);
-    if (newPage > 1) {
-      url.searchParams.set("page", String(newPage));
-    } else {
-      url.searchParams.delete("page");
-    }
-    if (mode !== "both") {
-      url.searchParams.set("mode", mode);
-    } else {
-      url.searchParams.delete("mode");
-    }
-    if (ext.trim()) {
-      url.searchParams.set("ext", ext.trim());
-    } else {
-      url.searchParams.delete("ext");
-    }
-    window.history.pushState(null, "", url.toString());
-
-    doSearch(query.trim(), newPage, mode, ext);
+    updateSearchParams(query.trim(), newPage, mode, ext);
   }
 
   function handleClear() {
@@ -251,12 +249,17 @@ function App() {
     setMode("both");
     setExt("");
     setExtPreset("");
-    window.history.pushState(null, "", window.location.pathname);
+    setSearchParams(new URLSearchParams());
   }
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
-      <h1 className="text-3xl font-bold tracking-tight mb-6">MiniSearch</h1>
+      <div className="flex items-center gap-3 mb-6">
+        <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors">
+          &larr; Profiles
+        </Link>
+        <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
+      </div>
 
       <form className="flex gap-2 mb-6" onSubmit={handleSearch}>
         <Input
@@ -354,7 +357,7 @@ function App() {
               <CardContent>
                 <a
                   className="text-primary font-semibold hover:underline block mb-1"
-                  href={`/api/presign?key=${encodeURIComponent(result.key)}`}
+                  href={`/api/p/${profileName}/presign?key=${encodeURIComponent(result.key)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -439,6 +442,15 @@ function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<ProfileList />} />
+      <Route path="/p/:profileName" element={<SearchView />} />
+    </Routes>
   );
 }
 

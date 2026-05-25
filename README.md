@@ -1,6 +1,6 @@
 # minisearch
 
-Full-text search over S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend.
+Full-text search over S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend. Supports multiple named profiles, each pointing to a different S3 bucket with its own search index.
 
 ## Install (pre-built binary)
 
@@ -47,29 +47,37 @@ cd frontend
 bun install
 ```
 
-## Environment
+## Configuration
 
-Copy `.env.example` or create `.env` in the project root:
+Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, S3 connection details, and a unique Tantivy index path:
 
+```toml
+[[profiles]]
+name = "my-bucket"
+description = "My S3 bucket files"
+aws_access_key_id = "your-access-key"
+aws_secret_access_key = "your-secret-key"
+aws_region = "us-east-1"
+aws_endpoint_url = "https://your-s3-endpoint.example.com"
+s3_bucket_name = "your-bucket"
+tantivy_index_path = "./tantivy_index/my-bucket"
 ```
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_REGION=
-AWS_ENDPOINT_URL=
-S3_BUCKET_NAME=
-TANTIVY_INDEX_PATH=./tantivy_index  # optional, defaults to ./tantivy_index
-```
+
+Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The `tantivy_index_path` is used directly as the index directory — ensure each profile has a unique path.
 
 ## Usage
 
 The binary has two subcommands:
 
 ```bash
-# Build the search index from S3 bucket contents
-cargo run -- index
+# Build the search index (all profiles)
+minisearch -c config.toml index
 
-# Start the web server (port 3000)
-cargo run -- serve
+# Build the search index (specific profile)
+minisearch -c config.toml index --profile my-bucket
+
+# Start the web server (port 52378)
+minisearch -c config.toml serve
 ```
 
 Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The server works without an index (search returns 503), so you can start serving immediately while building the index separately.
@@ -79,8 +87,8 @@ Run `index` first to download and index all files from the S3 bucket, then `serv
 Start the backend and frontend dev server in separate terminals:
 
 ```bash
-# Terminal 1 — backend (port 3000)
-cargo run -- serve
+# Terminal 1 — backend (port 52378)
+cargo run -- -c tmp/config.toml serve
 
 # Terminal 2 — frontend (port 5173, proxies API to backend)
 cd frontend
@@ -105,23 +113,15 @@ cargo build --release   # embeds frontend/dist/ into the binary
 
 The resulting binary at `target/release/minisearch` serves the SPA with no external files needed.
 
-## API
-
-| Endpoint             | Method | Success Response                                                                                          | Errors                                                                 |
-|----------------------|--------|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
-| `/api/search?q=`     | GET    | JSON search results with structured snippet text segments, byte offsets, and highlight flags               | `400` for missing/invalid query; `503` when no index exists; `500` generic "internal server error" (details logged server-side) |
-| `/api/presign?key=`  | GET    | Temporary redirect to a time-limited S3 presigned URL | `400` for missing key; `500` generic "internal server error" (details logged server-side) |
-| `/api/health`        | GET    | `ok`                                                                                                      | -                                                                      |
-
 ## Guides
 
 - [S3 Gateway Setup](docs/s3-gateway-setup.md) — use MiniSearch with a local filesystem via an S3 gateway (VersityGW, rclone)
 
 ## Frontend Tooling
 
-| Tool       | Purpose              | Command              |
-|------------|----------------------|----------------------|
-| Vite       | Dev server & bundler | `bun run dev`        |
-| TypeScript | Type checking        | `tsc -b`             |
-| Biome      | Lint & format        | `bun run check`      |
-| Biome fix  | Auto-fix             | `bun run check:fix`  |
+| Tool | Purpose | Command |
+|---|---|---|
+| Vite | Dev server & bundler | `bun run dev` |
+| TypeScript | Type checking | `tsc -b` |
+| Biome | Lint & format | `bun run check` |
+| Biome fix | Auto-fix | `bun run check:fix` |
