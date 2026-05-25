@@ -46,11 +46,10 @@ const TEXT_APP_TYPES: &[&str] = &[
 fn is_text_by_name(key: &str) -> bool {
     let path = Path::new(key);
 
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        let ext_lower = ext.to_ascii_lowercase();
-        if TEXT_EXTENSIONS.iter().any(|&e| e == ext_lower) {
-            return true;
-        }
+    if let Some(ext) = extension_from_key(key)
+        && TEXT_EXTENSIONS.contains(&ext.as_str())
+    {
+        return true;
     }
 
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -64,15 +63,37 @@ fn is_text_by_name(key: &str) -> bool {
 }
 
 fn extract_extension(key: &str) -> String {
+    extension_from_key(key).unwrap_or_default()
+}
+
+fn extension_from_key(key: &str) -> Option<String> {
     Path::new(key)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default()
+        .or_else(|| {
+            let file_name = Path::new(key).file_name()?.to_str()?;
+            let dotfile_ext = file_name.strip_prefix('.')?;
+            if dotfile_ext.is_empty() || dotfile_ext.contains('.') {
+                return None;
+            }
+            if TEXT_EXTENSIONS.contains(&dotfile_ext) {
+                Some(dotfile_ext.to_string())
+            } else {
+                None
+            }
+        })
 }
 
 fn is_text_content_type(content_type: &str) -> bool {
-    content_type.starts_with("text/") || TEXT_APP_TYPES.contains(&content_type)
+    let content_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+
+    content_type.starts_with("text/") || TEXT_APP_TYPES.contains(&content_type.as_str())
 }
 
 fn lookup_last_modified(
@@ -293,6 +314,43 @@ fn remove_deleted_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_text_files_by_extension_basename_and_dotfile() {
+        for key in ["notes.MD", "src/main.rs", "docs/README", ".gitignore", ".env"] {
+            assert!(is_text_by_name(key), "{key} should be detected as text");
+        }
+
+        for key in ["image.png", "archive.tar.gz", ".DS_Store"] {
+            assert!(!is_text_by_name(key), "{key} should not be detected as text");
+        }
+    }
+
+    #[test]
+    fn extracts_lowercase_extensions_including_known_dotfiles() {
+        assert_eq!(extract_extension("docs/Notes.MD"), "md");
+        assert_eq!(extract_extension("Cargo.lock"), "lock");
+        assert_eq!(extract_extension(".gitignore"), "gitignore");
+        assert_eq!(extract_extension(".env"), "env");
+        assert_eq!(extract_extension("README"), "");
+    }
+
+    #[test]
+    fn detects_text_content_types_by_essence() {
+        for content_type in [
+            "text/plain; charset=utf-8",
+            "Application/JSON",
+            "application/xml; charset=UTF-8",
+            " application/sql ",
+        ] {
+            assert!(
+                is_text_content_type(content_type),
+                "{content_type} should be detected as text"
+            );
+        }
+
+        assert!(!is_text_content_type("application/octet-stream"));
+    }
 
     fn setup_index(keys: &[&str]) -> (tempfile::TempDir, tantivy::Index, search::SearchSchema) {
         let dir = tempfile::tempdir().unwrap();
