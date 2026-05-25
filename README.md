@@ -1,6 +1,6 @@
 # fts-everywhere
 
-S3 file browser with a Rust/Axum backend and React frontend.
+Full-text search over S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend.
 
 ## Prerequisites
 
@@ -34,7 +34,22 @@ AWS_SECRET_ACCESS_KEY=
 AWS_REGION=
 AWS_ENDPOINT_URL=
 S3_BUCKET_NAME=
+TANTIVY_INDEX_PATH=./tantivy_index  # optional, defaults to ./tantivy_index
 ```
+
+## Usage
+
+The binary has two subcommands:
+
+```bash
+# Build the search index from S3 bucket contents
+cargo run -- index
+
+# Start the web server (port 3000)
+cargo run -- serve
+```
+
+Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The server works without an index (search returns 503), so you can start serving immediately while building the index separately.
 
 ## Development
 
@@ -42,14 +57,14 @@ Start the backend and frontend dev server in separate terminals:
 
 ```bash
 # Terminal 1 — backend (port 3000)
-cargo run
+cargo run -- serve
 
 # Terminal 2 — frontend (port 5173, proxies API to backend)
 cd frontend
 bun run dev
 ```
 
-Open http://localhost:5173. API requests (`/files`, `/api/*`) are proxied to the backend.
+Open http://localhost:5173. API requests (`/api/*`) are proxied to the backend.
 
 You can also use `bacon` for auto-rebuilding the backend on file changes.
 
@@ -69,10 +84,11 @@ The resulting binary at `target/release/fts-everywhere` serves the SPA with no e
 
 ## API
 
-| Endpoint       | Method | Response                          |
-|----------------|--------|-----------------------------------|
-| `/files`       | GET    | JSON list of S3 objects           |
-| `/api/health`  | GET    | `ok`                              |
+| Endpoint             | Method | Success Response                                                                                          | Errors                                                                 |
+|----------------------|--------|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
+| `/api/search?q=`     | GET    | JSON search results with structured snippet text segments, byte offsets, and highlight flags               | `400` for missing/invalid query; `503` when no index exists; `500` for search/retrieval failures |
+| `/api/presign?key=`  | GET    | Temporary redirect to a time-limited S3 presigned URL via layer 5 `handlers::presign`; layer 6 frontend result links use it in `frontend/src/App.tsx` | `400` for missing key; `500` for presign config or S3 presign failures |
+| `/api/health`        | GET    | `ok`                                                                                                      | -                                                                      |
 
 ## Frontend Tooling
 

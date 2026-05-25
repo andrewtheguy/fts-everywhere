@@ -1,51 +1,407 @@
-use axum::{extract::State, http::StatusCode, Json};
-use serde::Serialize;
+use std::collections::BTreeSet;
+use std::ops::Range;
+use std::time::Duration;
+
+use aws_sdk_s3::presigning::PresigningConfig;
+use axum::{extract::Query, extract::State, http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
+use tantivy::collector::{Count, TopDocs};
+use tantivy::query::{Query as TantivyQuery, QueryParser};
+use tantivy::schema::{Field, Value};
+use tantivy::tokenizer::{TextAnalyzer, TokenStream};
+use tantivy::TantivyDocument;
 
 use crate::state::AppState;
 
-#[derive(Serialize)]
-pub struct ListFilesResponse {
-    pub files: Vec<S3Object>,
+#[derive(Deserialize)]
+pub struct SearchParams {
+    pub q: Option<String>,
 }
 
 #[derive(Serialize)]
-pub struct S3Object {
+pub struct SearchResponse {
+    pub query: String,
+    pub count: usize,
+    pub limit: usize,
+    pub results: Vec<SearchResult>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResult {
     pub key: String,
-    pub size: i64,
+    pub snippet: Vec<SearchSnippetSegment>,
+    pub score: f32,
+    pub size: u64,
     pub last_modified: String,
 }
 
-pub async fn list_files(
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub struct SearchSnippetSegment {
+    pub text: String,
+    pub highlighted: bool,
+    pub start: usize,
+    pub end: usize,
+}
+
+pub async fn search(
     State(state): State<AppState>,
-) -> Result<Json<ListFilesResponse>, (StatusCode, String)> {
-    let output = state
-        .s3_client
-        .list_objects_v2()
-        .bucket(&state.bucket_name)
-        .send()
-        .await
+    Query(params): Query<SearchParams>,
+) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+    let query_str = params
+        .q
+        .filter(|q| !q.trim().is_empty())
+        .ok_or((StatusCode::BAD_REQUEST, "missing or empty query parameter 'q'".into()))?;
+
+    let schema = state
+        .search_schema
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "search index not available — run `cargo run -- index` first".into()))?;
+
+    let reader = state
+        .search_reader
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "search index not available — run `cargo run -- index` first".into()))?;
+
+    let searcher = reader.searcher();
+    let query_parser = QueryParser::for_index(searcher.index(), vec![schema.key, schema.content]);
+    let query = query_parser
+        .parse_query(&query_str)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid query: {e}")))?;
+
+    let (total_count, top_docs) = searcher
+        .search(&query, &(Count, TopDocs::with_limit(SEARCH_RESULT_LIMIT).order_by_score()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("search failed: {e}")))?;
+
+    let snippet_terms = query_terms_for_field(&*query, schema.content);
+    let snippet_tokenizer = searcher
+        .index()
+        .tokenizer_for_field(schema.content)
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to list S3 objects: {e}"),
+                format!("snippet tokenizer failed: {e}"),
             )
         })?;
 
-    let files = output
-        .contents()
-        .iter()
-        .map(|obj| S3Object {
-            key: obj.key().unwrap_or("").to_string(),
-            size: obj.size().unwrap_or(0),
-            last_modified: obj
-                .last_modified()
-                .map(|dt| {
-                    dt.fmt(aws_sdk_s3::primitives::DateTimeFormat::DateTime)
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default(),
-        })
-        .collect();
+    let mut results = Vec::with_capacity(top_docs.len());
+    for (score, doc_address) in &top_docs {
+        let doc: TantivyDocument = searcher
+            .doc(*doc_address)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to retrieve doc: {e}")))?;
 
-    Ok(Json(ListFilesResponse { files }))
+        let key = doc
+            .get_first(schema.key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let size = doc
+            .get_first(schema.size)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let last_modified = doc
+            .get_first(schema.last_modified)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let content = doc_text(&doc, schema.content);
+        let snippet = render_snippet(&content, snippet_tokenizer.clone(), &snippet_terms);
+
+        results.push(SearchResult {
+            key,
+            snippet,
+            score: *score,
+            size,
+            last_modified,
+        });
+    }
+
+    Ok(Json(SearchResponse {
+        query: query_str,
+        count: total_count,
+        limit: SEARCH_RESULT_LIMIT,
+        results,
+    }))
+}
+
+const SEARCH_RESULT_LIMIT: usize = 20;
+const MAX_SNIPPET_CHARS: usize = 150;
+
+fn query_terms_for_field(query: &dyn TantivyQuery, field: Field) -> BTreeSet<String> {
+    let mut terms = BTreeSet::new();
+    query.query_terms(&mut |term, _| {
+        if term.field() == field {
+            if let Some(term_str) = term.value().as_str() {
+                terms.insert(term_str.to_lowercase());
+            }
+        }
+    });
+    terms
+}
+
+fn doc_text(doc: &TantivyDocument, field: Field) -> String {
+    let mut text = String::new();
+    for value in doc.get_all(field) {
+        if let Some(value_str) = value.as_str() {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(value_str);
+        }
+    }
+    text
+}
+
+fn render_snippet(
+    text: &str,
+    mut tokenizer: TextAnalyzer,
+    terms: &BTreeSet<String>,
+) -> Vec<SearchSnippetSegment> {
+    let ranges = highlight_ranges(text, &mut tokenizer, terms);
+    let fragment = best_fragment(text, &ranges, MAX_SNIPPET_CHARS);
+    let visible_ranges = ranges
+        .iter()
+        .filter_map(|range| {
+            let start = range.start.max(fragment.start);
+            let end = range.end.min(fragment.end);
+            if start < end {
+                Some(start - fragment.start..end - fragment.start)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    snippet_segments(&text[fragment], &visible_ranges)
+}
+
+fn highlight_ranges(
+    text: &str,
+    tokenizer: &mut TextAnalyzer,
+    terms: &BTreeSet<String>,
+) -> Vec<Range<usize>> {
+    if terms.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut token_stream = tokenizer.token_stream(text);
+    while let Some(token) = token_stream.next() {
+        if !terms.contains(&token.text.to_lowercase()) {
+            continue;
+        }
+        if token.offset_from >= token.offset_to || token.offset_to > text.len() {
+            continue;
+        }
+        if !text.is_char_boundary(token.offset_from) || !text.is_char_boundary(token.offset_to) {
+            continue;
+        }
+        ranges.push(token.offset_from..token.offset_to);
+    }
+    merge_ranges(ranges)
+}
+
+fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.sort_by_key(|range| (range.start, range.end));
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for range in ranges {
+        if let Some(last) = merged.last_mut() {
+            if range.start <= last.end {
+                last.end = last.end.max(range.end);
+            } else {
+                merged.push(range);
+            }
+        } else {
+            merged.push(range);
+        }
+    }
+    merged
+}
+
+fn best_fragment(text: &str, ranges: &[Range<usize>], max_chars: usize) -> Range<usize> {
+    let char_offsets = char_offsets(text);
+    let total_chars = char_offsets.len().saturating_sub(1);
+    if total_chars <= max_chars {
+        return 0..text.len();
+    }
+    if ranges.is_empty() {
+        return 0..char_offsets[max_chars];
+    }
+
+    let mut best = 0..char_offsets[max_chars];
+    let mut best_score = 0usize;
+    for range in ranges {
+        let start_char = byte_to_char_index(&char_offsets, range.start);
+        let end_char = byte_to_char_index(&char_offsets, range.end);
+        let hit_chars = end_char.saturating_sub(start_char).max(1);
+        let context_chars = max_chars.saturating_sub(hit_chars) / 2;
+        let mut fragment_start_char = start_char.saturating_sub(context_chars);
+        let mut fragment_end_char = (fragment_start_char + max_chars).min(total_chars);
+        if fragment_end_char < end_char {
+            fragment_end_char = end_char.min(total_chars);
+            fragment_start_char = fragment_end_char.saturating_sub(max_chars);
+        }
+
+        let candidate = char_offsets[fragment_start_char]..char_offsets[fragment_end_char];
+        let score = ranges
+            .iter()
+            .filter(|highlight| {
+                highlight.start < candidate.end && highlight.end > candidate.start
+            })
+            .count();
+        if score > best_score || (score == best_score && candidate.start < best.start) {
+            best = candidate;
+            best_score = score;
+        }
+    }
+    best
+}
+
+fn char_offsets(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+        .collect()
+}
+
+fn byte_to_char_index(char_offsets: &[usize], byte_offset: usize) -> usize {
+    match char_offsets.binary_search(&byte_offset) {
+        Ok(index) => index,
+        Err(index) => index.saturating_sub(1),
+    }
+}
+
+fn snippet_segments(fragment: &str, ranges: &[Range<usize>]) -> Vec<SearchSnippetSegment> {
+    let mut segments = Vec::new();
+    let mut start_from = 0usize;
+    for range in ranges {
+        if start_from < range.start {
+            segments.push(SearchSnippetSegment {
+                text: fragment[start_from..range.start].to_string(),
+                highlighted: false,
+                start: start_from,
+                end: range.start,
+            });
+        }
+        segments.push(SearchSnippetSegment {
+            text: fragment[range.clone()].to_string(),
+            highlighted: true,
+            start: range.start,
+            end: range.end,
+        });
+        start_from = range.end;
+    }
+    if start_from < fragment.len() {
+        segments.push(SearchSnippetSegment {
+            text: fragment[start_from..].to_string(),
+            highlighted: false,
+            start: start_from,
+            end: fragment.len(),
+        });
+    }
+    segments
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn jieba_terms(text: &str) -> BTreeSet<String> {
+        let mut terms = BTreeSet::new();
+        let mut tokenizer = TextAnalyzer::from(tantivy_jieba::JiebaTokenizer::new());
+        let mut token_stream = tokenizer.token_stream(text);
+        while let Some(token) = token_stream.next() {
+            terms.insert(token.text.to_lowercase());
+        }
+        terms
+    }
+
+    #[test]
+    fn render_snippet_handles_chinese_search_terms() {
+        let terms = jieba_terms("朱古力");
+        let snippet = render_snippet(
+            "甜品朱古力蛋糕 & <menu>",
+            TextAnalyzer::from(tantivy_jieba::JiebaTokenizer::new()),
+            &terms,
+        );
+
+        assert_eq!(
+            snippet,
+            vec![
+                SearchSnippetSegment {
+                    text: "甜品".to_string(),
+                    highlighted: false,
+                    start: 0,
+                    end: 6,
+                },
+                SearchSnippetSegment {
+                    text: "朱古力".to_string(),
+                    highlighted: true,
+                    start: 6,
+                    end: 15,
+                },
+                SearchSnippetSegment {
+                    text: "蛋糕 & <menu>".to_string(),
+                    highlighted: false,
+                    start: 15,
+                    end: 30,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn render_snippet_ignores_highlights_outside_selected_fragment() {
+        let terms = BTreeSet::from(["alpha".to_string(), "omega".to_string()]);
+        let snippet = render_snippet(
+            &format!("alpha {} omega omega", "middle ".repeat(200)),
+            TextAnalyzer::from(tantivy::tokenizer::SimpleTokenizer::default()),
+            &terms,
+        );
+        let highlighted = snippet
+            .iter()
+            .filter(|segment| segment.highlighted)
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(highlighted, vec!["omega", "omega"]);
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PresignParams {
+    pub key: Option<String>,
+}
+
+pub async fn presign(
+    State(state): State<AppState>,
+    Query(params): Query<PresignParams>,
+) -> Result<axum::response::Redirect, (StatusCode, String)> {
+    let key = params
+        .key
+        .filter(|k| !k.trim().is_empty())
+        .ok_or((StatusCode::BAD_REQUEST, "missing or empty query parameter 'key'".into()))?;
+
+    let mime = mime_guess::from_path(&key).first_or_octet_stream();
+    let content_type = if mime.type_() == mime_guess::mime::TEXT {
+        format!("{mime}; charset=utf-8")
+    } else {
+        mime.to_string()
+    };
+
+    let presign_config = PresigningConfig::expires_in(Duration::from_secs(3600))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign config error: {e}")))?;
+
+    let presigned = state
+        .s3_client
+        .get_object()
+        .bucket(&state.bucket_name)
+        .key(&key)
+        .response_content_type(&content_type)
+        .response_content_disposition("inline")
+        .presigned(presign_config)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign failed: {e}")))?;
+
+    Ok(axum::response::Redirect::temporary(presigned.uri()))
 }

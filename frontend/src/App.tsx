@@ -1,14 +1,26 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
-interface S3Object {
+interface SearchResult {
   key: string;
+  snippet: SearchSnippetSegment[];
+  score: number;
   size: number;
   last_modified: string;
 }
 
-interface ListFilesResponse {
-  files: S3Object[];
+interface SearchSnippetSegment {
+  text: string;
+  highlighted: boolean;
+  start: number;
+  end: number;
+}
+
+interface SearchResponse {
+  query: string;
+  count: number;
+  limit: number;
+  results: SearchResult[];
 }
 
 function formatBytes(bytes: number): string {
@@ -19,51 +31,147 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
 }
 
-function App() {
-  const [files, setFiles] = useState<S3Object[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+function getInitialQuery(): string {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("q") || "";
+}
 
-  useEffect(() => {
-    fetch("/files")
+function App() {
+  const [query, setQuery] = useState(getInitialQuery);
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [resultLimit, setResultLimit] = useState<number | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const currentSearchController = useRef<AbortController | null>(null);
+
+  const doSearch = useCallback((q: string) => {
+    currentSearchController.current?.abort();
+    const controller = new AbortController();
+    currentSearchController.current = controller;
+
+    setSearching(true);
+    setError(null);
+
+    fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ListFilesResponse>;
+        return res.json() as Promise<SearchResponse>;
       })
       .then((data) => {
-        setFiles(data.files);
-        setLoading(false);
+        if (currentSearchController.current !== controller) return;
+        setResults(data.results);
+        setTotalCount(data.count);
+        setResultLimit(data.limit);
       })
       .catch((err) => {
-        setError(err.message);
-        setLoading(false);
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (currentSearchController.current === controller) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (currentSearchController.current === controller) {
+          currentSearchController.current = null;
+          setSearching(false);
+        }
       });
   }, []);
 
+  useEffect(() => {
+    const initial = getInitialQuery();
+    if (initial) {
+      doSearch(initial);
+    }
+    return () => {
+      currentSearchController.current?.abort();
+      currentSearchController.current = null;
+    };
+  }, [doSearch]);
+
+  function handleSearch(e: FormEvent) {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("q", q);
+    window.history.pushState(null, "", url.toString());
+
+    doSearch(q);
+  }
+
+  function handleClear() {
+    currentSearchController.current?.abort();
+    currentSearchController.current = null;
+    setQuery("");
+    setResults(null);
+    setTotalCount(null);
+    setResultLimit(null);
+    setSearching(false);
+    setError(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("q");
+    window.history.pushState(null, "", url.pathname);
+  }
+
   return (
     <div className="app">
-      <h1>S3 File Browser</h1>
-      {loading && <p>Loading...</p>}
+      <h1>FTS Everywhere</h1>
+      <form className="search-form" onSubmit={handleSearch}>
+        <input
+          className="search-input"
+          type="text"
+          placeholder="Search file contents..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button type="submit" disabled={searching}>
+          Search
+        </button>
+        {results !== null && (
+          <button type="button" onClick={handleClear}>
+            Clear
+          </button>
+        )}
+      </form>
+
+      {searching && <p>Searching...</p>}
       {error && <p className="error">Error: {error}</p>}
-      {!loading && !error && (
-        <table>
-          <thead>
-            <tr>
-              <th>Key</th>
-              <th>Size</th>
-              <th>Last Modified</th>
-            </tr>
-          </thead>
-          <tbody>
-            {files.map((file) => (
-              <tr key={file.key}>
-                <td>{file.key}</td>
-                <td>{formatBytes(file.size)}</td>
-                <td>{new Date(file.last_modified).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      {results !== null && !searching && !error && (
+        <div className="search-results">
+          <p className="result-count">
+            {totalCount !== null && resultLimit !== null && totalCount > resultLimit
+              ? `Showing first ${results.length} of ${totalCount} results`
+              : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
+          </p>
+          {results.map((result) => (
+            <div key={result.key} className="search-result">
+              <a
+                className="result-key"
+                href={`/api/presign?key=${encodeURIComponent(result.key)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {result.key}
+              </a>
+              <div className="result-meta">
+                {formatBytes(result.size)} &middot;{" "}
+                {new Date(result.last_modified).toLocaleString()}
+              </div>
+              <div className="result-snippet">
+                {result.snippet.map((segment) =>
+                  segment.highlighted ? (
+                    <b key={`${segment.start}-${segment.end}-highlight`}>{segment.text}</b>
+                  ) : (
+                    <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
+                  ),
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
