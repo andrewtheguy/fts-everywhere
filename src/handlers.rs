@@ -5,7 +5,7 @@ use std::time::Duration;
 use aws_sdk_s3::presigning::PresigningConfig;
 use axum::{extract::Query, extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
-use tantivy::collector::TopDocs;
+use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{Query as TantivyQuery, QueryParser};
 use tantivy::schema::{Field, Value};
 use tantivy::tokenizer::{TextAnalyzer, TokenStream};
@@ -22,6 +22,7 @@ pub struct SearchParams {
 pub struct SearchResponse {
     pub query: String,
     pub count: usize,
+    pub limit: usize,
     pub results: Vec<SearchResult>,
 }
 
@@ -67,8 +68,8 @@ pub async fn search(
         .parse_query(&query_str)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid query: {e}")))?;
 
-    let top_docs = searcher
-        .search(&query, &TopDocs::with_limit(20).order_by_score())
+    let (total_count, top_docs) = searcher
+        .search(&query, &(Count, TopDocs::with_limit(SEARCH_RESULT_LIMIT).order_by_score()))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("search failed: {e}")))?;
 
     let snippet_terms = query_terms_for_field(&*query, schema.content);
@@ -117,11 +118,13 @@ pub async fn search(
 
     Ok(Json(SearchResponse {
         query: query_str,
-        count: results.len(),
+        count: total_count,
+        limit: SEARCH_RESULT_LIMIT,
         results,
     }))
 }
 
+const SEARCH_RESULT_LIMIT: usize = 20;
 const MAX_SNIPPET_CHARS: usize = 150;
 
 fn query_terms_for_field(query: &dyn TantivyQuery, field: Field) -> BTreeSet<String> {

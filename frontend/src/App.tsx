@@ -19,6 +19,7 @@ interface SearchSnippetSegment {
 interface SearchResponse {
   query: string;
   count: number;
+  limit: number;
   results: SearchResult[];
 }
 
@@ -38,6 +39,8 @@ function getInitialQuery(): string {
 function App() {
   const [query, setQuery] = useState(getInitialQuery);
   const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [resultLimit, setResultLimit] = useState<number | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const currentSearchController = useRef<AbortController | null>(null);
@@ -58,6 +61,8 @@ function App() {
       .then((data) => {
         if (currentSearchController.current !== controller) return;
         setResults(data.results);
+        setTotalCount(data.count);
+        setResultLimit(data.limit);
       })
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -101,6 +106,8 @@ function App() {
     currentSearchController.current = null;
     setQuery("");
     setResults(null);
+    setTotalCount(null);
+    setResultLimit(null);
     setSearching(false);
     setError(null);
     const url = new URL(window.location.href);
@@ -135,7 +142,9 @@ function App() {
       {results !== null && !searching && !error && (
         <div className="search-results">
           <p className="result-count">
-            {results.length} result{results.length !== 1 ? "s" : ""} found
+            {totalCount !== null && resultLimit !== null && totalCount > resultLimit
+              ? `Showing first ${results.length} of ${totalCount} results`
+              : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
           </p>
           {results.map((result) => (
             <div key={result.key} className="search-result">
