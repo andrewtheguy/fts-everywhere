@@ -111,6 +111,7 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Resu
     let mut removed = 0usize;
     let mut failed = 0usize;
     let mut seen_keys = HashSet::new();
+    let mut failed_keys = HashSet::new();
     let mut continuation_token: Option<String> = None;
 
     loop {
@@ -189,12 +190,14 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Resu
                         Ok(bytes) => bytes.into_bytes(),
                         Err(e) => {
                             warn!("failed to read body for {key}: {e}");
+                            failed_keys.insert(key.clone());
                             failed += 1;
                             continue;
                         }
                     },
                     Err(e) => {
                         warn!("failed to download {key}: {e}");
+                        failed_keys.insert(key.clone());
                         failed += 1;
                         continue;
                     }
@@ -256,7 +259,7 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Resu
                     .get_first(search_schema.key_raw)
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                if !key.is_empty() && !seen_keys.contains(key) {
+                if !key.is_empty() && !seen_keys.contains(key) && !failed_keys.contains(key) {
                     writer.delete_term(Term::from_field_text(search_schema.key_raw, key));
                     removed += 1;
                 }
