@@ -10,6 +10,7 @@ const JIEBA_TOKENIZER_NAME: &str = "jieba";
 pub struct SearchSchema {
     pub schema: Schema,
     pub key: Field,
+    pub key_raw: Field,
     pub content: Field,
     pub size: Field,
     pub last_modified: Field,
@@ -25,12 +26,14 @@ pub fn build_schema() -> SearchSchema {
         )
         .set_stored();
     let key = builder.add_text_field("key", text_options.clone());
+    let key_raw = builder.add_text_field("key_raw", STRING | STORED);
     let content = builder.add_text_field("content", text_options);
     let size = builder.add_u64_field("size", STORED);
     let last_modified = builder.add_text_field("last_modified", STRING | STORED);
     SearchSchema {
         schema: builder.build(),
         key,
+        key_raw,
         content,
         size,
         last_modified,
