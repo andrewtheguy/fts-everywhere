@@ -37,16 +37,7 @@ const TEXT_APP_TYPES: &[&str] = &[
     "application/sql",
 ];
 
-fn is_text_file(key: &str, content_type: Option<&str>) -> bool {
-    if let Some(ct) = content_type {
-        if ct.starts_with("text/") {
-            return true;
-        }
-        if TEXT_APP_TYPES.iter().any(|&t| ct == t) {
-            return true;
-        }
-    }
-
+fn is_text_by_name(key: &str) -> bool {
     let path = Path::new(key);
 
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -66,6 +57,10 @@ fn is_text_file(key: &str, content_type: Option<&str>) -> bool {
     false
 }
 
+fn is_text_content_type(content_type: &str) -> bool {
+    content_type.starts_with("text/") || TEXT_APP_TYPES.iter().any(|&t| content_type == t)
+}
+
 pub async fn run_indexer() {
     let bucket_name = std::env::var("S3_BUCKET_NAME").expect("S3_BUCKET_NAME must be set");
     let aws_config = aws_config::load_from_env().await;
@@ -82,7 +77,9 @@ pub async fn run_indexer() {
     writer.commit().unwrap();
 
     let mut indexed = 0usize;
-    let mut skipped = 0usize;
+    let mut skipped_non_text = 0usize;
+    let mut skipped_non_utf8 = 0usize;
+    let mut failed = 0usize;
     let mut continuation_token: Option<String> = None;
 
     loop {
@@ -107,35 +104,50 @@ pub async fn run_indexer() {
                 })
                 .unwrap_or_default();
 
-            let get_result = s3_client
+            if !is_text_by_name(&key) {
+                match s3_client
+                    .head_object()
+                    .bucket(&bucket_name)
+                    .key(&key)
+                    .send()
+                    .await
+                {
+                    Ok(head) => {
+                        let is_text = head
+                            .content_type()
+                            .is_some_and(|ct| is_text_content_type(ct));
+                        if !is_text {
+                            skipped_non_text += 1;
+                            continue;
+                        }
+                    }
+                    Err(_) => {
+                        skipped_non_text += 1;
+                        continue;
+                    }
+                }
+            }
+
+            println!("indexing: {key}");
+
+            let body = match s3_client
                 .get_object()
                 .bucket(&bucket_name)
                 .key(&key)
                 .send()
-                .await;
-
-            let content_type = match &get_result {
-                Ok(output) => output.content_type().map(|s| s.to_string()),
-                Err(_) => None,
-            };
-
-            if !is_text_file(&key, content_type.as_deref()) {
-                skipped += 1;
-                continue;
-            }
-
-            let body = match get_result {
+                .await
+            {
                 Ok(output) => match output.body.collect().await {
                     Ok(bytes) => bytes.into_bytes(),
                     Err(e) => {
                         eprintln!("warning: failed to read body for {key}: {e}");
-                        skipped += 1;
+                        failed += 1;
                         continue;
                     }
                 },
                 Err(e) => {
                     eprintln!("warning: failed to download {key}: {e}");
-                    skipped += 1;
+                    failed += 1;
                     continue;
                 }
             };
@@ -143,8 +155,7 @@ pub async fn run_indexer() {
             let text = match String::from_utf8(body.to_vec()) {
                 Ok(t) => t,
                 Err(_) => {
-                    eprintln!("warning: skipping non-UTF-8 file: {key}");
-                    skipped += 1;
+                    skipped_non_utf8 += 1;
                     continue;
                 }
             };
@@ -173,5 +184,10 @@ pub async fn run_indexer() {
     }
 
     writer.commit().unwrap();
-    println!("done: indexed {indexed} files, skipped {skipped}");
+    let total = indexed + skipped_non_text + skipped_non_utf8 + failed;
+    println!("\ndone: {total} files total");
+    println!("  indexed:          {indexed}");
+    println!("  skipped non-text: {skipped_non_text}");
+    println!("  skipped non-utf8: {skipped_non_utf8}");
+    println!("  failed:           {failed}");
 }
