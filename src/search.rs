@@ -42,18 +42,24 @@ pub fn register_tokenizers(index: &Index) {
         .register(JIEBA_TOKENIZER_NAME, tantivy_jieba::JiebaTokenizer::new());
 }
 
+fn endpoint_index_host(endpoint_url: &str) -> String {
+    let url = url::Url::parse(endpoint_url).expect("AWS_ENDPOINT_URL must be a valid URL");
+    match url.host().expect("AWS_ENDPOINT_URL must include a host") {
+        url::Host::Domain(host) => host.to_string(),
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => {
+            panic!("AWS_ENDPOINT_URL host must be a hostname, not an IP address")
+        }
+    }
+}
+
 pub fn index_path() -> PathBuf {
     let base = std::env::var("TANTIVY_INDEX_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./tantivy_index"));
 
-    let host = std::env::var("AWS_ENDPOINT_URL")
-        .ok()
-        .and_then(|u| url::Url::parse(&u).ok())
-        .and_then(|u| u.host_str().map(|h| h.to_string()))
-        .unwrap_or_else(|| "default".to_string());
-
-    let bucket = std::env::var("S3_BUCKET_NAME").unwrap_or_else(|_| "default".to_string());
+    let endpoint_url = std::env::var("AWS_ENDPOINT_URL").expect("AWS_ENDPOINT_URL must be set");
+    let host = endpoint_index_host(&endpoint_url);
+    let bucket = std::env::var("S3_BUCKET_NAME").expect("S3_BUCKET_NAME must be set");
 
     base.join(host).join(bucket)
 }
@@ -76,5 +82,30 @@ pub fn open_index(path: &Path) -> Option<Index> {
         Some(index)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::endpoint_index_host;
+
+    #[test]
+    fn endpoint_index_host_uses_hostname_without_port() {
+        assert_eq!(
+            endpoint_index_host("https://minio.example.test:9000"),
+            "minio.example.test"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "AWS_ENDPOINT_URL host must be a hostname, not an IP address")]
+    fn endpoint_index_host_rejects_ipv4_addresses() {
+        endpoint_index_host("http://127.0.0.1:9000");
+    }
+
+    #[test]
+    #[should_panic(expected = "AWS_ENDPOINT_URL host must be a hostname, not an IP address")]
+    fn endpoint_index_host_rejects_ipv6_addresses() {
+        endpoint_index_host("http://[::1]:9000");
     }
 }
