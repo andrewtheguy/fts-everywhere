@@ -17,5 +17,9 @@ pub enum Commands {
     /// Start the web server
     Serve,
     /// Index S3 bucket contents into Tantivy
-    Index,
+    Index {
+        /// Profile name to index
+        #[arg(short, long)]
+        profile: String,
+    },
 }

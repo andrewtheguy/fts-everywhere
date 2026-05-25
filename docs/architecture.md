@@ -1,12 +1,12 @@
 # Architecture
 
-MiniSearch is a full-text search application for S3 objects. It indexes file contents and metadata from an S3-compatible bucket into a [Tantivy](https://github.com/quickwit-oss/tantivy) search index, then serves a web UI for querying and browsing results.
+MiniSearch is a full-text search application for S3 objects. It indexes file contents and metadata from S3-compatible buckets into [Tantivy](https://github.com/quickwit-oss/tantivy) search indices, then serves a web UI for querying and browsing results. Multiple named profiles allow searching across different S3 buckets from a single instance.
 
 ## High-level overview
 
 ```
                   ┌──────────────┐
-                  │  S3 Bucket   │
+                  │  S3 Buckets  │
                   └──────┬───────┘
                          │
               ┌──────────┴──────────┐
@@ -18,7 +18,7 @@ MiniSearch is a full-text search application for S3 objects. It indexes file con
               │
         ┌─────▼──────┐
         │  Tantivy   │
-        │   Index    │
+        │  Indices   │
         └─────┬──────┘
               │
         ┌─────▼──────┐       ┌────────────┐
@@ -33,8 +33,8 @@ The application ships as a single binary. The React frontend is compiled and emb
 
 The binary has two subcommands:
 
-- **`index`** — Scans the configured S3 bucket, downloads text files, and builds/updates the Tantivy index on disk.
-- **`serve`** — Starts the Axum web server on port 3000, serving the API and embedded frontend.
+- **`index`** — Scans an S3 bucket, downloads text files, and builds/updates the Tantivy index on disk. Requires a `--profile` flag to specify which profile to index.
+- **`serve`** — Starts the Axum web server on port 52378, serving the API and embedded frontend.
 
 Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CONFIG` env var).
 
@@ -45,12 +45,12 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 | Module | Responsibility |
 |---|---|
 | `main.rs` | Entry point — parses CLI args, loads config, dispatches to indexer or server |
-| `cli.rs` | Clap-based CLI definition (`Serve` / `Index` commands) |
-| `config.rs` | TOML config parsing, AWS credential and S3 client construction |
-| `state.rs` | `AppState` — shared state holding S3 client, index path, and thread-safe search reader |
+| `cli.rs` | Clap-based CLI definition (`Serve` / `Index` commands, `--profile` flag) |
+| `config.rs` | TOML config parsing with multi-profile support, profile name validation, S3 client construction |
+| `state.rs` | Per-profile shared state (`ProfileEntry`, `ProfileState`) organized in `AppState` |
 | `search.rs` | Tantivy schema definition, tokenizer registration, index open/create |
 | `indexer.rs` | S3 object listing, content downloading, incremental index updates |
-| `handlers.rs` | Axum request handlers for search, presign, and health endpoints |
+| `handlers.rs` | Axum request handlers for profile listing, search, presign, and health endpoints |
 | `error.rs` | `AppError` enum — maps error variants to HTTP status codes |
 | `assets.rs` | Embedded frontend asset serving with SPA fallback |
 
@@ -65,7 +65,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 
 The [Jieba](https://github.com/nickel-org/tantivy-jieba) tokenizer handles both Chinese and English text segmentation.
 
-The index is stored at `{tantivy_index_path}/{s3_host}/{bucket_name}/`.
+Each profile's index is stored at the path specified by `tantivy_index_path` in its config entry.
 
 ### Indexing pipeline
 
@@ -76,14 +76,22 @@ The index is stored at `{tantivy_index_path}/{s3_host}/{bucket_name}/`.
 5. Removes index entries for S3 objects that no longer exist.
 6. Commits to the Tantivy index every 100 documents.
 
+### Frontend routes
+
+| Path | Description |
+|---|---|
+| `/` | Profile list — shows all configured profiles with descriptions |
+| `/p/<name>` | Search UI scoped to a specific profile |
+
 ### API endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/search?q=<query>&page=<n>` | Full-text search with paginated results (20 per page) |
-| `GET` | `/api/presign?key=<s3_key>` | Redirects to a 1-hour presigned S3 URL |
-| `GET` | `/api/health` | Returns `"ok"` |
-| `GET` | `/*` | Serves embedded frontend assets (SPA fallback to `index.html`) |
+| Endpoint | Method | Success Response | Errors |
+|---|---|---|---|
+| `/api/profiles` | GET | JSON array of `{ name, description }` for each profile | - |
+| `/api/p/:profile/search?q=` | GET | JSON search results with structured snippet text segments, byte offsets, and highlight flags | `400` for missing/invalid query; `404` for unknown profile; `503` when no index exists; `500` generic "internal server error" (details logged server-side) |
+| `/api/p/:profile/presign?key=` | GET | Temporary redirect to a time-limited S3 presigned URL | `400` for missing key; `404` for unknown profile; `500` generic "internal server error" (details logged server-side) |
+| `/api/health` | GET | `ok` | - |
+| `/*` | GET | Serves embedded frontend assets (SPA fallback to `index.html`) | - |
 
 ### Search response
 
@@ -118,22 +126,28 @@ Snippet generation selects the best 150-character fragment with the most query t
 
 ```
 AppState
-├── s3_client: aws_sdk_s3::Client
-├── bucket_name: String
-├── index_path: PathBuf
-└── search: Arc<RwLock<Option<SearchState>>>
-         └── SearchState
-             ├── reader: IndexReader
-             └── schema: SearchSchema
+└── profiles: Vec<ProfileEntry>
+     └── ProfileEntry
+         ├── name: String
+         ├── description: String
+         └── state: ProfileState
+             ├── s3_client: aws_sdk_s3::Client
+             ├── bucket_name: String
+             ├── index_path: PathBuf
+             └── search: Arc<RwLock<Option<SearchState>>>
+                  └── SearchState
+                      ├── reader: IndexReader
+                      └── schema: SearchSchema
 ```
 
-The search reader is lazily initialized on first query. This allows the server to start even if no index has been built yet (returns 503 until ready).
+The search reader is lazily initialized on first query per profile. This allows the server to start even if no index has been built yet (returns 503 until ready).
 
 ### Error handling
 
 - `anyhow` for application-level errors (main, indexer, search internals).
 - `thiserror` for typed API errors (`AppError` in `error.rs`):
   - `BadRequest` → 400
+  - `NotFound` → 404
   - `ServiceUnavailable` → 503
   - `Internal` → 500 (generic message to client, full error chain logged to stderr)
 
@@ -142,6 +156,7 @@ The search reader is lazily initialized on first query. This allows the server t
 ### Stack
 
 - React 19 with TypeScript
+- React Router 7 (client-side routing)
 - Vite (bundler)
 - Tailwind CSS (styling)
 - @base-ui/react (headless UI primitives)
@@ -150,10 +165,11 @@ The search reader is lazily initialized on first query. This allows the server t
 
 ### Key behaviors
 
-- **URL-synchronized search state**: query and page number are reflected in URL parameters (`?q=...&page=...`) for shareability and browser history navigation.
+- **Profile routing**: root path (`/`) shows a list of all configured profiles; `/p/<name>` shows the search UI scoped to that profile.
+- **URL-synchronized search state**: query, page number, search mode, and extension filter are reflected in URL parameters (`/p/<name>?q=...&page=...`) for shareability and browser history navigation.
 - **Request cancellation**: uses `AbortController` to cancel in-flight searches when a new query is submitted.
 - **Snippet rendering**: displays search result snippets with `<mark>` tags on highlighted terms.
-- **File access**: result links point to `/api/presign?key=...`, which redirects to a temporary S3 URL.
+- **File access**: result links point to `/api/p/<profile>/presign?key=...`, which redirects to a temporary S3 URL.
 - **Pagination**: first/previous/next/last page controls with scroll-to-top on page change.
 
 ## Build and deployment
@@ -169,10 +185,10 @@ The frontend is built first, then `rust-embed` bundles the `frontend/dist/` dire
 ### Development
 
 ```bash
-# Backend (port 3000)
+# Backend (port 52378)
 cargo run -- -c config.toml serve
 
-# Frontend dev server (port 5173, proxies /api to :3000)
+# Frontend dev server (port 5173, proxies /api to :52378)
 cd frontend && bun run dev
 ```
 
@@ -185,16 +201,21 @@ GitHub Actions builds release binaries for:
 
 ### Configuration
 
-All configuration is in a single TOML file:
+All configuration is in a single TOML file with `[[profiles]]` array entries:
 
 ```toml
+[[profiles]]
+name = "my-bucket"
+description = "My S3 bucket files"
 aws_access_key_id = "..."
 aws_secret_access_key = "..."
 aws_region = "us-east-1"
-aws_endpoint_url = "https://s3.amazonaws.com"  # or MinIO/compatible endpoint
+aws_endpoint_url = "https://s3.amazonaws.com"
 s3_bucket_name = "my-bucket"
-tantivy_index_path = "./tantivy_index"
+tantivy_index_path = "./tantivy_index/my-bucket"
 ```
+
+Profile names must be unique and URL-safe (lowercase letters, digits, hyphens, underscores).
 
 ## Deployment patterns
 
