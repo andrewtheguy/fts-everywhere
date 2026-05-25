@@ -18,6 +18,7 @@ use crate::state::AppState;
 #[derive(Deserialize)]
 pub struct SearchParams {
     pub q: Option<String>,
+    pub page: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -25,6 +26,8 @@ pub struct SearchResponse {
     pub query: String,
     pub count: usize,
     pub limit: usize,
+    pub page: usize,
+    pub total_pages: usize,
     pub results: Vec<SearchResult>,
 }
 
@@ -78,8 +81,11 @@ pub async fn search(
         .parse_query(&query_str)
         .map_err(|e| AppError::bad_request(format!("invalid query: {e}")))?;
 
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * SEARCH_RESULT_LIMIT;
+
     let (total_count, top_docs) = searcher
-        .search(&query, &(Count, TopDocs::with_limit(SEARCH_RESULT_LIMIT).order_by_score()))
+        .search(&query, &(Count, TopDocs::with_limit(SEARCH_RESULT_LIMIT).and_offset(offset).order_by_score()))
         .context("search failed")?;
 
     let snippet_terms = query_terms_for_field(&*query, schema.content);
@@ -121,10 +127,14 @@ pub async fn search(
         });
     }
 
+    let total_pages = if total_count == 0 { 0 } else { total_count.div_ceil(SEARCH_RESULT_LIMIT) };
+
     Ok(Json(SearchResponse {
         query: query_str,
         count: total_count,
         limit: SEARCH_RESULT_LIMIT,
+        page,
+        total_pages,
         results,
     }))
 }
