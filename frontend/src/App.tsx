@@ -64,6 +64,10 @@ interface BrowseResponse {
 
 type SearchMode = "both" | "filename" | "content";
 
+function encodeS3Path(key: string): string {
+  return key.split("/").map(encodeURIComponent).join("/");
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -576,7 +580,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                   <button
                     type="button"
                     className={`hover:underline ${isLast ? "font-semibold text-foreground" : "text-primary"}`}
-                    onClick={() => !isLast && navigate(`/p/${profileName}/browse/${segPrefix}`)}
+                    onClick={() =>
+                      !isLast && navigate(`/p/${profileName}/browse/${encodeS3Path(segPrefix)}`)
+                    }
                     disabled={isLast}
                   >
                     {seg}
@@ -607,7 +613,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                       key={folder.key}
                       type="button"
                       className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
-                      onClick={() => navigate(`/p/${profileName}/browse/${folder.key}`)}
+                      onClick={() =>
+                        navigate(`/p/${profileName}/browse/${encodeS3Path(folder.key)}`)
+                      }
                     >
                       <span className="text-muted-foreground">&#128193;</span>
                       <span className="font-medium">{folder.name}</span>
