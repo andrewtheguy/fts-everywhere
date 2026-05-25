@@ -52,6 +52,20 @@ function App() {
       });
   }
 
+  function openPresigned(key: string) {
+    fetch(`/api/presign?key=${encodeURIComponent(key)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<{ url: string }>;
+      })
+      .then((data) => {
+        window.open(data.url, "_blank");
+      })
+      .catch((err) => {
+        setError(err.message);
+      });
+  }
+
   function handleClear() {
     setQuery("");
     setResults(null);
@@ -89,7 +103,16 @@ function App() {
           </p>
           {results.map((result) => (
             <div key={result.key} className="search-result">
-              <div className="result-key">{result.key}</div>
+              <a
+                className="result-key"
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  openPresigned(result.key);
+                }}
+              >
+                {result.key}
+              </a>
               <div className="result-meta">
                 {formatBytes(result.size)} &middot;{" "}
                 {new Date(result.last_modified).toLocaleString()}

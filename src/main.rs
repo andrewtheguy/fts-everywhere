@@ -20,6 +20,11 @@ async fn main() {
             indexer::run_indexer().await;
         }
         Commands::Serve => {
+            let bucket_name =
+                std::env::var("S3_BUCKET_NAME").expect("S3_BUCKET_NAME must be set");
+            let aws_config = aws_config::load_from_env().await;
+            let s3_client = aws_sdk_s3::Client::new(&aws_config);
+
             let index_path = search::index_path();
             let (search_reader, search_schema) = match search::open_index(&index_path) {
                 Some(index) => {
@@ -36,6 +41,8 @@ async fn main() {
             };
 
             let state = AppState {
+                s3_client,
+                bucket_name,
                 search_reader,
                 search_schema,
             };
@@ -43,6 +50,7 @@ async fn main() {
             let app = Router::new()
                 .route("/api/health", get(|| async { "ok" }))
                 .route("/api/search", get(handlers::search))
+                .route("/api/presign", get(handlers::presign))
                 .with_state(state)
                 .fallback(assets::static_handler);
 

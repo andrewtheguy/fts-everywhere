@@ -48,9 +48,17 @@ h1 {
   margin-bottom: 0.75rem;
 }
 
-.result-key {
+a.result-key {
+  display: block;
   font-weight: 600;
   margin-bottom: 0.25rem;
+  color: #1a6fb5;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.result-key:hover {
+  text-decoration: underline;
 }
 
 .result-meta {

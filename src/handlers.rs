@@ -1,9 +1,12 @@
+use std::time::Duration;
+
+use aws_sdk_s3::presigning::PresigningConfig;
 use axum::{extract::Query, extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::snippet::SnippetGenerator;
 use tantivy::schema::Value;
+use tantivy::snippet::SnippetGenerator;
 use tantivy::TantivyDocument;
 
 use crate::state::AppState;
@@ -98,5 +101,47 @@ pub async fn search(
         query: query_str,
         count: results.len(),
         results,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct PresignParams {
+    pub key: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PresignResponse {
+    pub url: String,
+}
+
+pub async fn presign(
+    State(state): State<AppState>,
+    Query(params): Query<PresignParams>,
+) -> Result<Json<PresignResponse>, (StatusCode, String)> {
+    let key = params
+        .key
+        .filter(|k| !k.trim().is_empty())
+        .ok_or((StatusCode::BAD_REQUEST, "missing or empty query parameter 'key'".into()))?;
+
+    let content_type = mime_guess::from_path(&key)
+        .first_or_octet_stream()
+        .to_string();
+
+    let presign_config = PresigningConfig::expires_in(Duration::from_secs(3600))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign config error: {e}")))?;
+
+    let presigned = state
+        .s3_client
+        .get_object()
+        .bucket(&state.bucket_name)
+        .key(&key)
+        .response_content_type(&content_type)
+        .response_content_disposition("inline")
+        .presigned(presign_config)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign failed: {e}")))?;
+
+    Ok(Json(PresignResponse {
+        url: presigned.uri().to_string(),
     }))
 }
