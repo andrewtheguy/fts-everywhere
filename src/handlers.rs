@@ -371,6 +371,12 @@ mod tests {
 
         assert_eq!(highlighted, vec!["omega", "omega"]);
     }
+
+    #[test]
+    fn m4a_mime_type_is_audio_mp4() {
+        let mime = new_mime_guess::from_path("test.m4a").first_or_octet_stream();
+        assert_eq!(mime, "audio/mp4");
+    }
 }
 
 #[derive(Deserialize)]
@@ -387,8 +393,8 @@ pub async fn presign(
         .filter(|k| !k.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'key'"))?;
 
-    let mime = mime_guess::from_path(&key).first_or_octet_stream();
-    let content_type = if mime.type_() == mime_guess::mime::TEXT {
+    let mime = new_mime_guess::from_path(&key).first_or_octet_stream();
+    let content_type = if mime.type_() == "text" {
         format!("{mime}; charset=utf-8")
     } else {
         mime.to_string()
