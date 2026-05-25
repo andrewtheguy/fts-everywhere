@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useState } from "react";
 import "./App.css";
 
-interface S3Object {
+interface SearchResult {
   key: string;
+  snippet_html: string;
+  score: number;
   size: number;
   last_modified: string;
 }
 
-interface ListFilesResponse {
-  files: S3Object[];
+interface SearchResponse {
+  query: string;
+  count: number;
+  results: SearchResult[];
 }
 
 function formatBytes(bytes: number): string {
@@ -20,50 +24,83 @@ function formatBytes(bytes: number): string {
 }
 
 function App() {
-  const [files, setFiles] = useState<S3Object[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/files")
+  function handleSearch(e: FormEvent) {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+
+    setSearching(true);
+    setError(null);
+
+    fetch(`/api/search?q=${encodeURIComponent(q)}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ListFilesResponse>;
+        return res.json() as Promise<SearchResponse>;
       })
       .then((data) => {
-        setFiles(data.files);
-        setLoading(false);
+        setResults(data.results);
+        setSearching(false);
       })
       .catch((err) => {
         setError(err.message);
-        setLoading(false);
+        setSearching(false);
       });
-  }, []);
+  }
+
+  function handleClear() {
+    setQuery("");
+    setResults(null);
+    setError(null);
+  }
 
   return (
     <div className="app">
-      <h1>S3 File Browser</h1>
-      {loading && <p>Loading...</p>}
+      <h1>FTS Everywhere</h1>
+      <form className="search-form" onSubmit={handleSearch}>
+        <input
+          className="search-input"
+          type="text"
+          placeholder="Search file contents..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button type="submit" disabled={searching}>
+          Search
+        </button>
+        {results !== null && (
+          <button type="button" onClick={handleClear}>
+            Clear
+          </button>
+        )}
+      </form>
+
+      {searching && <p>Searching...</p>}
       {error && <p className="error">Error: {error}</p>}
-      {!loading && !error && (
-        <table>
-          <thead>
-            <tr>
-              <th>Key</th>
-              <th>Size</th>
-              <th>Last Modified</th>
-            </tr>
-          </thead>
-          <tbody>
-            {files.map((file) => (
-              <tr key={file.key}>
-                <td>{file.key}</td>
-                <td>{formatBytes(file.size)}</td>
-                <td>{new Date(file.last_modified).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      {results !== null && !searching && !error && (
+        <div className="search-results">
+          <p className="result-count">
+            {results.length} result{results.length !== 1 ? "s" : ""} found
+          </p>
+          {results.map((result) => (
+            <div key={result.key} className="search-result">
+              <div className="result-key">{result.key}</div>
+              <div className="result-meta">
+                {formatBytes(result.size)} &middot;{" "}
+                {new Date(result.last_modified).toLocaleString()}
+              </div>
+              <div
+                className="result-snippet"
+                dangerouslySetInnerHTML={{ __html: result.snippet_html }}
+              />
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

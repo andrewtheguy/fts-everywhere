@@ -1,51 +1,102 @@
-use axum::{extract::State, http::StatusCode, Json};
-use serde::Serialize;
+use axum::{extract::Query, extract::State, http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
+use tantivy::collector::TopDocs;
+use tantivy::query::QueryParser;
+use tantivy::snippet::SnippetGenerator;
+use tantivy::schema::Value;
+use tantivy::TantivyDocument;
 
 use crate::state::AppState;
 
-#[derive(Serialize)]
-pub struct ListFilesResponse {
-    pub files: Vec<S3Object>,
+#[derive(Deserialize)]
+pub struct SearchParams {
+    pub q: Option<String>,
 }
 
 #[derive(Serialize)]
-pub struct S3Object {
+pub struct SearchResponse {
+    pub query: String,
+    pub count: usize,
+    pub results: Vec<SearchResult>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResult {
     pub key: String,
-    pub size: i64,
+    pub snippet_html: String,
+    pub score: f32,
+    pub size: u64,
     pub last_modified: String,
 }
 
-pub async fn list_files(
+pub async fn search(
     State(state): State<AppState>,
-) -> Result<Json<ListFilesResponse>, (StatusCode, String)> {
-    let output = state
-        .s3_client
-        .list_objects_v2()
-        .bucket(&state.bucket_name)
-        .send()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to list S3 objects: {e}"),
-            )
-        })?;
+    Query(params): Query<SearchParams>,
+) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+    let query_str = params
+        .q
+        .filter(|q| !q.trim().is_empty())
+        .ok_or((StatusCode::BAD_REQUEST, "missing or empty query parameter 'q'".into()))?;
 
-    let files = output
-        .contents()
-        .iter()
-        .map(|obj| S3Object {
-            key: obj.key().unwrap_or("").to_string(),
-            size: obj.size().unwrap_or(0),
-            last_modified: obj
-                .last_modified()
-                .map(|dt| {
-                    dt.fmt(aws_sdk_s3::primitives::DateTimeFormat::DateTime)
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default(),
-        })
-        .collect();
+    let schema = state
+        .search_schema
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "search index not available — run `cargo run -- index` first".into()))?;
 
-    Ok(Json(ListFilesResponse { files }))
+    let reader = state
+        .search_reader
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "search index not available — run `cargo run -- index` first".into()))?;
+
+    let searcher = reader.searcher();
+    let query_parser = QueryParser::for_index(searcher.index(), vec![schema.key, schema.content]);
+    let query = query_parser
+        .parse_query(&query_str)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid query: {e}")))?;
+
+    let top_docs = searcher
+        .search(&query, &TopDocs::with_limit(20))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("search failed: {e}")))?;
+
+    let snippet_generator = SnippetGenerator::create(&searcher, &query, schema.content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("snippet generation failed: {e}")))?;
+
+    let mut results = Vec::with_capacity(top_docs.len());
+    for (score, doc_address) in &top_docs {
+        let doc: TantivyDocument = searcher
+            .doc(*doc_address)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to retrieve doc: {e}")))?;
+
+        let key = doc
+            .get_first(schema.key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let size = doc
+            .get_first(schema.size)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let last_modified = doc
+            .get_first(schema.last_modified)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let snippet = snippet_generator.snippet_from_doc(&doc);
+        let snippet_html = snippet.to_html();
+
+        results.push(SearchResult {
+            key,
+            snippet_html,
+            score: *score,
+            size,
+            last_modified,
+        });
+    }
+
+    Ok(Json(SearchResponse {
+        query: query_str,
+        count: results.len(),
+        results,
+    }))
 }
