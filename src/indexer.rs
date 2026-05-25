@@ -1,6 +1,70 @@
+use std::path::Path;
+
 use tantivy::doc;
 
 use crate::search;
+
+const TEXT_EXTENSIONS: &[&str] = &[
+    "txt", "md", "markdown", "rst", "json", "jsonc", "jsonl", "ndjson", "csv", "tsv", "log",
+    "xml", "html", "htm", "yml", "yaml", "toml", "ini", "conf", "cfg", "env", "css", "scss",
+    "less", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte", "py", "rb", "go", "rs",
+    "java", "kt", "swift", "c", "h", "cc", "cpp", "hpp", "sh", "bash", "zsh", "fish", "ps1",
+    "sql", "tf", "hcl", "gitignore", "editorconfig", "lock",
+];
+
+const TEXT_BASENAMES: &[&str] = &[
+    "readme",
+    "license",
+    "licence",
+    "copying",
+    "authors",
+    "changelog",
+    "makefile",
+    "dockerfile",
+    "jenkinsfile",
+    "procfile",
+];
+
+const TEXT_APP_TYPES: &[&str] = &[
+    "application/json",
+    "application/xml",
+    "application/yaml",
+    "application/x-yaml",
+    "application/javascript",
+    "application/ecmascript",
+    "application/x-sh",
+    "application/x-shellscript",
+    "application/sql",
+];
+
+fn is_text_file(key: &str, content_type: Option<&str>) -> bool {
+    if let Some(ct) = content_type {
+        if ct.starts_with("text/") {
+            return true;
+        }
+        if TEXT_APP_TYPES.iter().any(|&t| ct == t) {
+            return true;
+        }
+    }
+
+    let path = Path::new(key);
+
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+        if TEXT_EXTENSIONS.iter().any(|&e| e == ext_lower) {
+            return true;
+        }
+    }
+
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        let name_lower = name.to_ascii_lowercase();
+        if TEXT_BASENAMES.iter().any(|&b| b == name_lower) {
+            return true;
+        }
+    }
+
+    false
+}
 
 pub async fn run_indexer() {
     let bucket_name = std::env::var("S3_BUCKET_NAME").expect("S3_BUCKET_NAME must be set");
@@ -9,8 +73,8 @@ pub async fn run_indexer() {
 
     let search_schema = search::build_schema();
     let index_path = search::index_path();
-    let index =
-        search::open_or_create_index(&index_path, &search_schema.schema).expect("failed to open/create index");
+    let index = search::open_or_create_index(&index_path, &search_schema.schema)
+        .expect("failed to open/create index");
 
     let mut writer = index.writer(50_000_000).expect("failed to create index writer");
 
@@ -49,6 +113,16 @@ pub async fn run_indexer() {
                 .key(&key)
                 .send()
                 .await;
+
+            let content_type = match &get_result {
+                Ok(output) => output.content_type().map(|s| s.to_string()),
+                Err(_) => None,
+            };
+
+            if !is_text_file(&key, content_type.as_deref()) {
+                skipped += 1;
+                continue;
+            }
 
             let body = match get_result {
                 Ok(output) => match output.body.collect().await {
