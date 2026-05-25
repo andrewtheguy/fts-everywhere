@@ -48,7 +48,7 @@ rclone serve s3 \
 - `--auth-key` — comma-separated `access_key_id,secret_access_key` pair; use the same values in the MiniSearch config.
 - `--addr` — address and port to listen on (default `127.0.0.1:8080`).
 
-With rclone, the served directory is exposed as a single bucket. The bucket name in your MiniSearch config should match the directory name.
+Like VersityGW, rclone treats subdirectories under the root as buckets and ignores files in the root. If you serve `/data` and your files are in `/data/documents`, the bucket name is `documents`.
 
 ## 2. Set up a hostname for the gateway
 
