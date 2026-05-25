@@ -23,6 +23,8 @@ interface SearchResponse {
   query: string;
   count: number;
   limit: number;
+  page: number;
+  total_pages: number;
   results: SearchResult[];
 }
 
@@ -39,16 +41,37 @@ function getInitialQuery(): string {
   return params.get("q") || "";
 }
 
+function getInitialPage(): number {
+  const params = new URLSearchParams(window.location.search);
+  const p = Number.parseInt(params.get("page") || "1", 10);
+  return p >= 1 ? p : 1;
+}
+
+function getPageNumbers(current: number, total: number): (number | "ellipsis")[] {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const pages: (number | "ellipsis")[] = [1];
+  const windowStart = Math.max(2, current - 1);
+  const windowEnd = Math.min(total - 1, current + 1);
+  if (windowStart > 2) pages.push("ellipsis");
+  for (let i = windowStart; i <= windowEnd; i++) pages.push(i);
+  if (windowEnd < total - 1) pages.push("ellipsis");
+  pages.push(total);
+  return pages;
+}
+
 function App() {
   const [query, setQuery] = useState(getInitialQuery);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [resultLimit, setResultLimit] = useState<number | null>(null);
+  const [page, setPage] = useState(getInitialPage);
+  const [totalPages, setTotalPages] = useState(0);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const currentSearchController = useRef<AbortController | null>(null);
 
-  const doSearch = useCallback((q: string) => {
+  const doSearch = useCallback((q: string, p: number) => {
     currentSearchController.current?.abort();
     const controller = new AbortController();
     currentSearchController.current = controller;
@@ -56,7 +79,10 @@ function App() {
     setSearching(true);
     setError(null);
 
-    fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
+    const params = new URLSearchParams({ q });
+    if (p > 1) params.set("page", String(p));
+
+    fetch(`/api/search?${params}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<SearchResponse>;
@@ -65,7 +91,8 @@ function App() {
         if (currentSearchController.current !== controller) return;
         setResults(data.results);
         setTotalCount(data.count);
-        setResultLimit(data.limit);
+
+        setTotalPages(data.total_pages);
       })
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -82,11 +109,30 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const initial = getInitialQuery();
-    if (initial) {
-      doSearch(initial);
+    const initialQuery = getInitialQuery();
+    const initialPage = getInitialPage();
+    if (initialQuery) {
+      doSearch(initialQuery, initialPage);
     }
+
+    function handlePopstate() {
+      const q = getInitialQuery();
+      const p = getInitialPage();
+      setQuery(q);
+      setPage(p);
+      if (q) {
+        doSearch(q, p);
+      } else {
+        setResults(null);
+        setTotalCount(null);
+
+        setTotalPages(0);
+      }
+    }
+
+    window.addEventListener("popstate", handlePopstate);
     return () => {
+      window.removeEventListener("popstate", handlePopstate);
       currentSearchController.current?.abort();
       currentSearchController.current = null;
     };
@@ -97,11 +143,28 @@ function App() {
     const q = query.trim();
     if (!q) return;
 
+    setPage(1);
     const url = new URL(window.location.href);
     url.searchParams.set("q", q);
+    url.searchParams.delete("page");
     window.history.pushState(null, "", url.toString());
 
-    doSearch(q);
+    doSearch(q, 1);
+  }
+
+  function handlePageChange(newPage: number) {
+    setPage(newPage);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+
+    const url = new URL(window.location.href);
+    if (newPage > 1) {
+      url.searchParams.set("page", String(newPage));
+    } else {
+      url.searchParams.delete("page");
+    }
+    window.history.pushState(null, "", url.toString());
+
+    doSearch(query.trim(), newPage);
   }
 
   function handleClear() {
@@ -110,11 +173,13 @@ function App() {
     setQuery("");
     setResults(null);
     setTotalCount(null);
-    setResultLimit(null);
+    setPage(1);
+    setTotalPages(0);
     setSearching(false);
     setError(null);
     const url = new URL(window.location.href);
     url.searchParams.delete("q");
+    url.searchParams.delete("page");
     window.history.pushState(null, "", url.pathname);
   }
 
@@ -151,8 +216,8 @@ function App() {
       {results !== null && !searching && !error && (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            {totalCount !== null && resultLimit !== null && totalCount > resultLimit
-              ? `Showing first ${results.length} of ${totalCount} results`
+            {totalCount !== null && totalPages > 1
+              ? `Page ${page} of ${totalPages} (${totalCount} results)`
               : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
           </p>
           {results.map((result) => (
@@ -187,6 +252,58 @@ function App() {
               </CardContent>
             </Card>
           ))}
+          {totalPages > 1 && (
+            <nav className="flex items-center justify-center gap-1 pt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => handlePageChange(1)}
+              >
+                First
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => handlePageChange(page - 1)}
+              >
+                Previous
+              </Button>
+              {getPageNumbers(page, totalPages).map((p, i) =>
+                p === "ellipsis" ? (
+                  <span key={`ellipsis-${i}`} className="px-1 text-sm text-muted-foreground">
+                    ...
+                  </span>
+                ) : (
+                  <Button
+                    key={p}
+                    variant={p === page ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => handlePageChange(p)}
+                  >
+                    {p}
+                  </Button>
+                ),
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                onClick={() => handlePageChange(page + 1)}
+              >
+                Next
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                onClick={() => handlePageChange(totalPages)}
+              >
+                Last
+              </Button>
+            </nav>
+          )}
         </div>
       )}
     </div>
