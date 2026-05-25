@@ -22,12 +22,10 @@ async fn main() -> anyhow::Result<()> {
             indexer::run_indexer().await?;
         }
         Commands::Serve => {
-            let bucket_name =
-                std::env::var("S3_BUCKET_NAME").context("S3_BUCKET_NAME must be set")?;
             let aws_config = aws_config::load_from_env().await;
             let s3_client = aws_sdk_s3::Client::new(&aws_config);
 
-            let index_path = search::index_path()?;
+            let search::IndexPathResult { path: index_path, bucket: bucket_name } = search::index_path()?;
             let (search_reader, search_schema) = match search::open_index(&index_path) {
                 Some(index) => {
                     let reader = index

@@ -107,13 +107,11 @@ fn load_existing_index(index: &tantivy::Index, schema: &search::SearchSchema) ->
 }
 
 pub async fn run_indexer() -> anyhow::Result<()> {
-    let bucket_name =
-        std::env::var("S3_BUCKET_NAME").context("S3_BUCKET_NAME must be set")?;
     let aws_config = aws_config::load_from_env().await;
     let s3_client = aws_sdk_s3::Client::new(&aws_config);
 
     let search_schema = search::build_schema();
-    let index_path = search::index_path()?;
+    let search::IndexPathResult { path: index_path, bucket: bucket_name } = search::index_path()?;
     let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
 
     let existing = load_existing_index(&index, &search_schema);
