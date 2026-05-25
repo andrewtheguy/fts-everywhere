@@ -185,7 +185,7 @@ function App() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
-      <h1 className="text-3xl font-bold tracking-tight mb-6">FTS Everywhere</h1>
+      <h1 className="text-3xl font-bold tracking-tight mb-6">MiniSearch</h1>
 
       <form className="flex gap-2 mb-6" onSubmit={handleSearch}>
         <Input
