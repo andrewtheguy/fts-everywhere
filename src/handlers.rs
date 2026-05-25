@@ -58,7 +58,7 @@ pub async fn search(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid query: {e}")))?;
 
     let top_docs = searcher
-        .search(&query, &TopDocs::with_limit(20))
+        .search(&query, &TopDocs::with_limit(20).order_by_score())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("search failed: {e}")))?;
 
     let snippet_generator = SnippetGenerator::create(&searcher, &query, schema.content)
