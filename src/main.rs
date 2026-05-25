@@ -1,5 +1,6 @@
 mod assets;
 mod cli;
+mod config;
 mod error;
 mod handlers;
 mod indexer;
@@ -16,18 +17,18 @@ use state::{AppState, SearchState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
     let cli = Cli::parse();
+    let config = config::AppConfig::load(&cli.config)?;
 
     match cli.command {
         Commands::Index => {
-            indexer::run_indexer().await?;
+            indexer::run_indexer(&config).await?;
         }
         Commands::Serve => {
-            let aws_config = aws_config::load_from_env().await;
-            let s3_client = aws_sdk_s3::Client::new(&aws_config);
+            let s3_client = config.s3_client().await;
 
-            let search::IndexPathResult { path: index_path, bucket: bucket_name } = search::index_path()?;
+            let search::IndexPathResult { path: index_path, bucket: bucket_name } =
+                search::index_path(&config.tantivy_index_path, &config.aws_endpoint_url, &config.s3_bucket_name)?;
             let search = match search::open_index(&index_path) {
                 Some(index) => {
                     let reader = index

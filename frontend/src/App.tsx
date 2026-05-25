@@ -272,7 +272,10 @@ function App() {
               </Button>
               {getPageNumbers(page, totalPages).map((p, i) =>
                 p === "ellipsis" ? (
-                  <span key={`ellipsis-${i}`} className="px-1 text-sm text-muted-foreground">
+                  <span
+                    key={`ellipsis-${i === 1 ? "start" : "end"}`}
+                    className="px-1 text-sm text-muted-foreground"
+                  >
                     ...
                   </span>
                 ) : (

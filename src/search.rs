@@ -61,19 +61,13 @@ pub struct IndexPathResult {
     pub bucket: String,
 }
 
-pub fn index_path() -> anyhow::Result<IndexPathResult> {
-    let base = std::env::var("TANTIVY_INDEX_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./tantivy_index"));
-
-    let endpoint_url =
-        std::env::var("AWS_ENDPOINT_URL").context("AWS_ENDPOINT_URL must be set")?;
-    let host = endpoint_index_host(&endpoint_url)?;
-    let bucket = std::env::var("S3_BUCKET_NAME").context("S3_BUCKET_NAME must be set")?;
+pub fn index_path(tantivy_index_path: &str, aws_endpoint_url: &str, s3_bucket_name: &str) -> anyhow::Result<IndexPathResult> {
+    let base = PathBuf::from(tantivy_index_path);
+    let host = endpoint_index_host(aws_endpoint_url)?;
 
     Ok(IndexPathResult {
-        path: base.join(&host).join(&bucket),
-        bucket,
+        path: base.join(&host).join(s3_bucket_name),
+        bucket: s3_bucket_name.to_string(),
     })
 }
 
