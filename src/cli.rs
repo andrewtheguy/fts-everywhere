@@ -1,8 +1,13 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "minisearch", version, about = "S3 file browser with full-text search")]
 pub struct Cli {
+    #[arg(short, long, env = "MINISEARCH_CONFIG")]
+    pub config: PathBuf,
+
     #[command(subcommand)]
     pub command: Commands,
 }

@@ -106,12 +106,12 @@ fn load_existing_index(index: &tantivy::Index, schema: &search::SearchSchema) ->
     existing
 }
 
-pub async fn run_indexer() -> anyhow::Result<()> {
-    let aws_config = aws_config::load_from_env().await;
-    let s3_client = aws_sdk_s3::Client::new(&aws_config);
+pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()> {
+    let s3_client = config.s3_client().await;
 
     let search_schema = search::build_schema();
-    let search::IndexPathResult { path: index_path, bucket: bucket_name } = search::index_path()?;
+    let search::IndexPathResult { path: index_path, bucket: bucket_name } =
+        search::index_path(&config.tantivy_index_path, &config.aws_endpoint_url, &config.s3_bucket_name)?;
     let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
 
     let existing = load_existing_index(&index, &search_schema);
