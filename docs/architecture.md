@@ -89,7 +89,7 @@ Each profile's index is stored at the path specified by `tantivy_index_path` in 
 | Endpoint | Method | Success Response | Errors |
 |---|---|---|---|
 | `/api/profiles` | GET | JSON array of `{ name, description }` for each profile | - |
-| `/api/p/:profile/search?q=` | GET | JSON search results with structured snippet text segments, byte offsets, and highlight flags | `400` for missing/invalid query; `404` for unknown profile; `503` when no index exists; `500` generic "internal server error" (details logged server-side) |
+| `/api/p/:profile/search?q=&prefix=` | GET | JSON search results with structured snippet text segments, byte offsets, and highlight flags. Optional `prefix` scopes results to keys under that S3 prefix. | `400` for missing/invalid query; `404` for unknown profile; `503` when no index exists; `500` generic "internal server error" (details logged server-side) |
 | `/api/p/:profile/browse?prefix=&continuation_token=` | GET | JSON listing of folders and files at the given S3 prefix | `404` for unknown profile; `500` generic "internal server error" (details logged server-side) |
 | `/api/p/:profile/presign?key=` | GET | Temporary redirect to a time-limited S3 presigned URL | `400` for missing key; `404` for unknown profile; `500` generic "internal server error" (details logged server-side) |
 | `/api/health` | GET | `ok` | - |
@@ -103,7 +103,7 @@ Results include structured snippet segments that indicate which portions of the 
 {
   "query": "search term",
   "count": 42,
-  "limit": 20,
+  "limit": 10,
   "page": 1,
   "total_pages": 3,
   "results": [
@@ -193,12 +193,12 @@ The search reader is lazily initialized on first query per profile. This allows 
 ### Key behaviors
 
 - **Profile routing**: root path (`/`) shows a list of all configured profiles; `/p/<name>` redirects to `/p/<name>/browse/`.
-- **Browse view**: the default view is an S3 folder browser with breadcrumb navigation. Folders are navigable via URL path segments (`/p/<name>/browse/transcripts/rthk-radio1/`). Clicking a file opens it in a new window via the presign endpoint. Paginated with a "Load more" button when results exceed 1000 items.
-- **Inline search**: a search bar is always visible above the browse listing. Submitting a search replaces the folder listing with search results inline; a "Clear" button returns to browse mode.
+- **Browse view**: the default view is an S3 folder browser with breadcrumb navigation. Folders are navigable via URL path segments (`/p/<name>/browse/transcripts/rthk-radio1/`). Clicking a file opens it in a new window via the presign endpoint. Uses S3's default batch size (1000 items per page) with Previous/Next navigation via continuation tokens.
+- **Inline search**: a search bar is always visible above the browse listing. Submitting a search replaces the folder listing with search results inline (scoped to the current prefix); a "Clear" button returns to browse mode. Search state (`q`, `page`, `mode`, `ext`) is synced to URL query parameters.
 - **Request cancellation**: uses `AbortController` to cancel in-flight searches and browse requests.
 - **Snippet rendering**: displays search result snippets with `<mark>` tags on highlighted terms.
 - **File access**: result links and file rows point to `/api/p/<profile>/presign?key=...`, which redirects to a temporary S3 URL.
-- **Search pagination**: first/previous/next/last page controls with scroll-to-top on page change.
+- **Search pagination**: 10 results per page. First/previous/next/last page controls with scroll-to-top on page change.
 
 ## Build and deployment
 
