@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import "./App.css";
 
 interface SearchResult {
@@ -23,17 +23,18 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
 }
 
+function getInitialQuery(): string {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("q") || "";
+}
+
 function App() {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(getInitialQuery);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function handleSearch(e: FormEvent) {
-    e.preventDefault();
-    const q = query.trim();
-    if (!q) return;
-
+  function doSearch(q: string) {
     setSearching(true);
     setError(null);
 
@@ -52,24 +53,32 @@ function App() {
       });
   }
 
-  function openPresigned(key: string) {
-    fetch(`/api/presign?key=${encodeURIComponent(key)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<{ url: string }>;
-      })
-      .then((data) => {
-        window.open(data.url, "_blank");
-      })
-      .catch((err) => {
-        setError(err.message);
-      });
+  useEffect(() => {
+    const initial = getInitialQuery();
+    if (initial) {
+      doSearch(initial);
+    }
+  }, []);
+
+  function handleSearch(e: FormEvent) {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("q", q);
+    window.history.pushState(null, "", url.toString());
+
+    doSearch(q);
   }
 
   function handleClear() {
     setQuery("");
     setResults(null);
     setError(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("q");
+    window.history.pushState(null, "", url.pathname);
   }
 
   return (
@@ -105,11 +114,9 @@ function App() {
             <div key={result.key} className="search-result">
               <a
                 className="result-key"
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  openPresigned(result.key);
-                }}
+                href={`/api/presign?key=${encodeURIComponent(result.key)}`}
+                target="_blank"
+                rel="noopener noreferrer"
               >
                 {result.key}
               </a>

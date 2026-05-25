@@ -109,15 +109,10 @@ pub struct PresignParams {
     pub key: Option<String>,
 }
 
-#[derive(Serialize)]
-pub struct PresignResponse {
-    pub url: String,
-}
-
 pub async fn presign(
     State(state): State<AppState>,
     Query(params): Query<PresignParams>,
-) -> Result<Json<PresignResponse>, (StatusCode, String)> {
+) -> Result<axum::response::Redirect, (StatusCode, String)> {
     let key = params
         .key
         .filter(|k| !k.trim().is_empty())
@@ -144,7 +139,5 @@ pub async fn presign(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign failed: {e}")))?;
 
-    Ok(Json(PresignResponse {
-        url: presigned.uri().to_string(),
-    }))
+    Ok(axum::response::Redirect::temporary(presigned.uri()))
 }
