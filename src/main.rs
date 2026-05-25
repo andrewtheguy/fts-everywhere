@@ -14,7 +14,7 @@ use anyhow::Context;
 use axum::{routing::get, Router};
 use clap::Parser;
 use cli::{Cli, Commands};
-use log::{info, warn};
+use log::{error, info, warn};
 use state::{AppState, ProfileEntry, ProfileState, SearchState};
 
 #[tokio::main]
@@ -86,7 +86,9 @@ async fn main() -> anyhow::Result<()> {
 
             let app_clone = app.clone();
             tokio::spawn(async move {
-                axum::serve(listener_v6, app_clone).await.ok();
+                if let Err(e) = axum::serve(listener_v6, app_clone).await {
+                    error!("IPv6 listener error: {e}");
+                }
             });
             axum::serve(listener_v4, app).await.context("server error")?;
         }

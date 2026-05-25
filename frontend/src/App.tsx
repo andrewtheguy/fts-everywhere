@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Link, Route, Routes, useParams, useSearchParams } from "react-router";
+import { Link, Navigate, Route, Routes, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -112,7 +112,11 @@ function ProfileList() {
 
       {profiles === null && !error && <p className="text-muted-foreground">Loading profiles...</p>}
 
-      {profiles && (
+      {profiles && profiles.length === 0 && (
+        <p className="text-muted-foreground">No profiles configured.</p>
+      )}
+
+      {profiles && profiles.length > 0 && (
         <div className="space-y-3">
           {profiles.map((profile) => (
             <Link key={profile.name} to={`/p/${profile.name}`} className="block">
@@ -132,8 +136,13 @@ function ProfileList() {
   );
 }
 
-function SearchView() {
+function SearchViewGuard() {
   const { profileName } = useParams<{ profileName: string }>();
+  if (!profileName) return <Navigate to="/" replace />;
+  return <SearchView profileName={profileName} />;
+}
+
+function SearchView({ profileName }: { profileName: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [query, setQuery] = useState(() => searchParams.get("q") || "");
@@ -196,29 +205,34 @@ function SearchView() {
     [profileName],
   );
 
+  const doSearchRef = useRef(doSearch);
+  doSearchRef.current = doSearch;
+
   useEffect(() => {
-    const initialQuery = searchParams.get("q") || "";
-    if (initialQuery) {
-      const initialPage = Number.parseInt(searchParams.get("page") || "1", 10);
-      const m = searchParams.get("mode");
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get("q") || "";
+    if (q) {
+      const p = Number.parseInt(params.get("page") || "1", 10);
+      const m = params.get("mode");
       const initialMode: SearchMode = m === "filename" || m === "content" ? m : "both";
-      const initialExt = searchParams.get("ext") || "";
-      doSearch(initialQuery, initialPage >= 1 ? initialPage : 1, initialMode, initialExt);
+      const e = params.get("ext") || "";
+      doSearchRef.current(q, p >= 1 ? p : 1, initialMode, e);
     }
 
     return () => {
       currentSearchController.current?.abort();
       currentSearchController.current = null;
     };
-  }, [doSearch, searchParams]);
+  }, []);
 
-  function updateSearchParams(q: string, p: number, m: SearchMode, e: string) {
+  function searchAndUpdateUrl(q: string, p: number, m: SearchMode, e: string) {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
     if (p > 1) params.set("page", String(p));
     if (m !== "both") params.set("mode", m);
     if (e.trim()) params.set("ext", e.trim());
     setSearchParams(params);
+    doSearch(q, p, m, e);
   }
 
   function handleSearch(e: FormEvent) {
@@ -227,13 +241,13 @@ function SearchView() {
     if (!q) return;
 
     setPage(1);
-    updateSearchParams(q, 1, mode, ext);
+    searchAndUpdateUrl(q, 1, mode, ext);
   }
 
   function handlePageChange(newPage: number) {
     setPage(newPage);
     window.scrollTo({ top: 0, behavior: "smooth" });
-    updateSearchParams(query.trim(), newPage, mode, ext);
+    searchAndUpdateUrl(query.trim(), newPage, mode, ext);
   }
 
   function handleClear() {
@@ -449,7 +463,7 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={<ProfileList />} />
-      <Route path="/p/:profileName" element={<SearchView />} />
+      <Route path="/p/:profileName" element={<SearchViewGuard />} />
     </Routes>
   );
 }
