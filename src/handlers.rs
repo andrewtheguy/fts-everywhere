@@ -1,12 +1,14 @@
+use std::collections::BTreeSet;
+use std::ops::Range;
 use std::time::Duration;
 
 use aws_sdk_s3::presigning::PresigningConfig;
 use axum::{extract::Query, extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::Value;
-use tantivy::snippet::SnippetGenerator;
+use tantivy::query::{Query as TantivyQuery, QueryParser};
+use tantivy::schema::{Field, Value};
+use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::TantivyDocument;
 
 use crate::state::AppState;
@@ -61,8 +63,16 @@ pub async fn search(
         .search(&query, &TopDocs::with_limit(20).order_by_score())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("search failed: {e}")))?;
 
-    let snippet_generator = SnippetGenerator::create(&searcher, &query, schema.content)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("snippet generation failed: {e}")))?;
+    let snippet_terms = query_terms_for_field(&*query, schema.content);
+    let snippet_tokenizer = searcher
+        .index()
+        .tokenizer_for_field(schema.content)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("snippet tokenizer failed: {e}"),
+            )
+        })?;
 
     let mut results = Vec::with_capacity(top_docs.len());
     for (score, doc_address) in &top_docs {
@@ -85,8 +95,9 @@ pub async fn search(
             .unwrap_or("")
             .to_string();
 
-        let snippet = snippet_generator.snippet_from_doc(&doc);
-        let snippet_html = snippet.to_html();
+        let content = doc_text(&doc, schema.content);
+        let snippet_html =
+            render_snippet_html(&content, snippet_tokenizer.clone(), &snippet_terms);
 
         results.push(SearchResult {
             key,
@@ -102,6 +113,201 @@ pub async fn search(
         count: results.len(),
         results,
     }))
+}
+
+const MAX_SNIPPET_CHARS: usize = 150;
+
+fn query_terms_for_field(query: &dyn TantivyQuery, field: Field) -> BTreeSet<String> {
+    let mut terms = BTreeSet::new();
+    query.query_terms(&mut |term, _| {
+        if term.field() == field {
+            if let Some(term_str) = term.value().as_str() {
+                terms.insert(term_str.to_lowercase());
+            }
+        }
+    });
+    terms
+}
+
+fn doc_text(doc: &TantivyDocument, field: Field) -> String {
+    let mut text = String::new();
+    for value in doc.get_all(field) {
+        if let Some(value_str) = value.as_str() {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(value_str);
+        }
+    }
+    text
+}
+
+fn render_snippet_html(
+    text: &str,
+    mut tokenizer: TextAnalyzer,
+    terms: &BTreeSet<String>,
+) -> String {
+    let ranges = highlight_ranges(text, &mut tokenizer, terms);
+    let fragment = best_fragment(text, &ranges, MAX_SNIPPET_CHARS);
+    let visible_ranges = ranges
+        .iter()
+        .filter_map(|range| {
+            let start = range.start.max(fragment.start);
+            let end = range.end.min(fragment.end);
+            (start < end).then_some(start - fragment.start..end - fragment.start)
+        })
+        .collect::<Vec<_>>();
+
+    highlighted_html(&text[fragment], &visible_ranges)
+}
+
+fn highlight_ranges(
+    text: &str,
+    tokenizer: &mut TextAnalyzer,
+    terms: &BTreeSet<String>,
+) -> Vec<Range<usize>> {
+    if terms.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut token_stream = tokenizer.token_stream(text);
+    while let Some(token) = token_stream.next() {
+        if !terms.contains(&token.text.to_lowercase()) {
+            continue;
+        }
+        if token.offset_from >= token.offset_to || token.offset_to > text.len() {
+            continue;
+        }
+        if !text.is_char_boundary(token.offset_from) || !text.is_char_boundary(token.offset_to) {
+            continue;
+        }
+        ranges.push(token.offset_from..token.offset_to);
+    }
+    merge_ranges(ranges)
+}
+
+fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.sort_by_key(|range| (range.start, range.end));
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for range in ranges {
+        if let Some(last) = merged.last_mut() {
+            if range.start <= last.end {
+                last.end = last.end.max(range.end);
+            } else {
+                merged.push(range);
+            }
+        } else {
+            merged.push(range);
+        }
+    }
+    merged
+}
+
+fn best_fragment(text: &str, ranges: &[Range<usize>], max_chars: usize) -> Range<usize> {
+    let char_offsets = char_offsets(text);
+    let total_chars = char_offsets.len().saturating_sub(1);
+    if total_chars <= max_chars {
+        return 0..text.len();
+    }
+    if ranges.is_empty() {
+        return 0..char_offsets[max_chars];
+    }
+
+    let mut best = 0..char_offsets[max_chars];
+    let mut best_score = 0usize;
+    for range in ranges {
+        let start_char = byte_to_char_index(&char_offsets, range.start);
+        let end_char = byte_to_char_index(&char_offsets, range.end);
+        let hit_chars = end_char.saturating_sub(start_char).max(1);
+        let context_chars = max_chars.saturating_sub(hit_chars) / 2;
+        let mut fragment_start_char = start_char.saturating_sub(context_chars);
+        let mut fragment_end_char = (fragment_start_char + max_chars).min(total_chars);
+        if fragment_end_char < end_char {
+            fragment_end_char = end_char.min(total_chars);
+            fragment_start_char = fragment_end_char.saturating_sub(max_chars);
+        }
+
+        let candidate = char_offsets[fragment_start_char]..char_offsets[fragment_end_char];
+        let score = ranges
+            .iter()
+            .filter(|highlight| {
+                highlight.start < candidate.end && highlight.end > candidate.start
+            })
+            .count();
+        if score > best_score || (score == best_score && candidate.start < best.start) {
+            best = candidate;
+            best_score = score;
+        }
+    }
+    best
+}
+
+fn char_offsets(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+        .collect()
+}
+
+fn byte_to_char_index(char_offsets: &[usize], byte_offset: usize) -> usize {
+    match char_offsets.binary_search(&byte_offset) {
+        Ok(index) => index,
+        Err(index) => index.saturating_sub(1),
+    }
+}
+
+fn highlighted_html(fragment: &str, ranges: &[Range<usize>]) -> String {
+    let mut html = String::new();
+    let mut start_from = 0usize;
+    for range in ranges {
+        push_escaped_html(&mut html, &fragment[start_from..range.start]);
+        html.push_str("<b>");
+        push_escaped_html(&mut html, &fragment[range.clone()]);
+        html.push_str("</b>");
+        start_from = range.end;
+    }
+    push_escaped_html(&mut html, &fragment[start_from..]);
+    html
+}
+
+fn push_escaped_html(html: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '&' => html.push_str("&amp;"),
+            '<' => html.push_str("&lt;"),
+            '>' => html.push_str("&gt;"),
+            '"' => html.push_str("&quot;"),
+            _ => html.push(ch),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn jieba_terms(text: &str) -> BTreeSet<String> {
+        let mut terms = BTreeSet::new();
+        let mut tokenizer = TextAnalyzer::from(tantivy_jieba::JiebaTokenizer::new());
+        let mut token_stream = tokenizer.token_stream(text);
+        while let Some(token) = token_stream.next() {
+            terms.insert(token.text.to_lowercase());
+        }
+        terms
+    }
+
+    #[test]
+    fn render_snippet_html_handles_chinese_search_terms() {
+        let terms = jieba_terms("朱古力");
+        let html = render_snippet_html(
+            "甜品朱古力蛋糕 & <menu>",
+            TextAnalyzer::from(tantivy_jieba::JiebaTokenizer::new()),
+            &terms,
+        );
+
+        assert_eq!(html, "甜品<b>朱古力</b>蛋糕 &amp; &lt;menu&gt;");
+    }
 }
 
 #[derive(Deserialize)]
