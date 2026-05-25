@@ -113,6 +113,10 @@ The resulting binary at `target/release/minisearch` serves the SPA with no exter
 | `/api/presign?key=`  | GET    | Temporary redirect to a time-limited S3 presigned URL | `400` for missing key; `500` generic "internal server error" (details logged server-side) |
 | `/api/health`        | GET    | `ok`                                                                                                      | -                                                                      |
 
+## Guides
+
+- [S3 Gateway Setup](docs/s3-gateway-setup.md) — use MiniSearch with a local filesystem via an S3 gateway like VersityGW
+
 ## Frontend Tooling
 
 | Tool       | Purpose              | Command              |

@@ -195,3 +195,13 @@ aws_endpoint_url = "https://s3.amazonaws.com"  # or MinIO/compatible endpoint
 s3_bucket_name = "my-bucket"
 tantivy_index_path = "./tantivy_index"
 ```
+
+## Deployment patterns
+
+### Direct S3
+
+The default setup: point MiniSearch at an AWS S3 or S3-compatible object store (MinIO, Garage, etc.).
+
+### S3 gateway over local filesystem
+
+Use an S3 gateway like [VersityGW](https://github.com/versity/versitygw) to expose a local directory as an S3-compatible endpoint. MiniSearch only performs read-only S3 operations, so the gateway never needs write permissions. See [S3 Gateway Setup](s3-gateway-setup.md) for a step-by-step guide.
