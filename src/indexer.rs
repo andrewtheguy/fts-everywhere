@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use anyhow::Context;
 use tantivy::schema::Value;
 use tantivy::{doc, Term, TantivyDocument};
 
@@ -105,20 +106,22 @@ fn load_existing_index(index: &tantivy::Index, schema: &search::SearchSchema) ->
     existing
 }
 
-pub async fn run_indexer() {
-    let bucket_name = std::env::var("S3_BUCKET_NAME").expect("S3_BUCKET_NAME must be set");
+pub async fn run_indexer() -> anyhow::Result<()> {
+    let bucket_name =
+        std::env::var("S3_BUCKET_NAME").context("S3_BUCKET_NAME must be set")?;
     let aws_config = aws_config::load_from_env().await;
     let s3_client = aws_sdk_s3::Client::new(&aws_config);
 
     let search_schema = search::build_schema();
-    let index_path = search::index_path();
-    let index = search::open_or_create_index(&index_path, &search_schema.schema)
-        .expect("failed to open/create index");
+    let index_path = search::index_path()?;
+    let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
 
     let existing = load_existing_index(&index, &search_schema);
     println!("existing index: {} documents", existing.len());
 
-    let mut writer = index.writer(50_000_000).expect("failed to create index writer");
+    let mut writer = index
+        .writer(50_000_000)
+        .context("failed to create index writer")?;
 
     let mut indexed = 0usize;
     let mut indexed_filename_only = 0usize;
@@ -133,7 +136,7 @@ pub async fn run_indexer() {
         if let Some(token) = &continuation_token {
             req = req.continuation_token(token);
         }
-        let output = req.send().await.expect("failed to list S3 objects");
+        let output = req.send().await.context("failed to list S3 objects")?;
 
         let contents = output.contents();
         for obj in contents {
@@ -179,13 +182,11 @@ pub async fn run_indexer() {
             if !is_text {
                 println!("indexing (filename only): {key}");
                 writer.delete_term(Term::from_field_text(search_schema.key, &key));
-                writer
-                    .add_document(doc!(
-                        search_schema.key => key.as_str(),
-                        search_schema.size => size,
-                        search_schema.last_modified => last_modified.as_str(),
-                    ))
-                    .unwrap();
+                writer.add_document(doc!(
+                    search_schema.key => key.as_str(),
+                    search_schema.size => size,
+                    search_schema.last_modified => last_modified.as_str(),
+                ))?;
                 indexed_filename_only += 1;
             } else {
                 println!("indexing: {key}");
@@ -216,31 +217,27 @@ pub async fn run_indexer() {
                 let text = String::from_utf8(body.into()).ok();
 
                 if let Some(text) = &text {
-                    writer
-                        .add_document(doc!(
-                            search_schema.key => key.as_str(),
-                            search_schema.content => text.as_str(),
-                            search_schema.size => size,
-                            search_schema.last_modified => last_modified.as_str(),
-                        ))
-                        .unwrap();
+                    writer.add_document(doc!(
+                        search_schema.key => key.as_str(),
+                        search_schema.content => text.as_str(),
+                        search_schema.size => size,
+                        search_schema.last_modified => last_modified.as_str(),
+                    ))?;
                     indexed += 1;
                 } else {
                     println!("  non-utf8, indexing filename only");
-                    writer
-                        .add_document(doc!(
-                            search_schema.key => key.as_str(),
-                            search_schema.size => size,
-                            search_schema.last_modified => last_modified.as_str(),
-                        ))
-                        .unwrap();
+                    writer.add_document(doc!(
+                        search_schema.key => key.as_str(),
+                        search_schema.size => size,
+                        search_schema.last_modified => last_modified.as_str(),
+                    ))?;
                     indexed_filename_only += 1;
                 }
             }
 
             let total_indexed = indexed + indexed_filename_only;
             if total_indexed % 100 == 0 {
-                writer.commit().unwrap();
+                writer.commit()?;
                 println!("progress: indexed {total_indexed} files...");
             }
         }
@@ -259,7 +256,7 @@ pub async fn run_indexer() {
         }
     }
 
-    writer.commit().unwrap();
+    writer.commit()?;
     let total = indexed + indexed_filename_only + unchanged + failed;
     println!("\ndone: {total} files total");
     println!("  indexed (full):       {indexed}");
@@ -267,4 +264,5 @@ pub async fn run_indexer() {
     println!("  unchanged:            {unchanged}");
     println!("  removed:              {removed}");
     println!("  failed:               {failed}");
+    Ok(())
 }
