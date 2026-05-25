@@ -318,17 +318,6 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
     };
   }, []);
 
-  function updateBrowseUrl(pageIdx: number) {
-    const params = new URLSearchParams();
-    if (pageIdx > 0) params.set("page", String(pageIdx + 1));
-    setSearchParams(params);
-  }
-
-  function handleBrowsePage(pageIdx: number) {
-    fetchBrowsePage(pageTokens[pageIdx] ?? null, pageIdx);
-    updateBrowseUrl(pageIdx);
-  }
-
   function searchAndUpdateUrl(q: string, p: number, m: SearchMode, e: string) {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -656,7 +645,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                     variant="outline"
                     size="sm"
                     disabled={browsePageIndex === 0 || browseLoading}
-                    onClick={() => handleBrowsePage(browsePageIndex - 1)}
+                    onClick={() =>
+                      fetchBrowsePage(pageTokens[browsePageIndex - 1] ?? null, browsePageIndex - 1)
+                    }
                   >
                     Previous
                   </Button>
@@ -665,7 +656,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                     variant="outline"
                     size="sm"
                     disabled={!isTruncated || browseLoading}
-                    onClick={() => handleBrowsePage(browsePageIndex + 1)}
+                    onClick={() =>
+                      fetchBrowsePage(pageTokens[browsePageIndex + 1] ?? null, browsePageIndex + 1)
+                    }
                   >
                     Next
                   </Button>

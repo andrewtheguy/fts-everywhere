@@ -574,8 +574,7 @@ pub async fn browse(
         .list_objects_v2()
         .bucket(&profile.state.bucket_name)
         .delimiter("/")
-        .prefix(&prefix)
-        .max_keys(PAGE_LIMIT as i32);
+        .prefix(&prefix);
 
     if let Some(token) = &params.continuation_token {
         req = req.continuation_token(token);
