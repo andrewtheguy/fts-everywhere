@@ -83,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
                 println!();
             }
         }
-        Commands::Serve { profile: profile_name } => {
+        Commands::Serve { profile: profile_name, port } => {
             let profile_config = config
                 .profiles
                 .iter()
@@ -133,13 +133,15 @@ async fn main() -> anyhow::Result<()> {
                 .with_state(state)
                 .fallback(assets::static_handler);
 
-            let listener_v6 = tokio::net::TcpListener::bind("[::1]:52378")
+            let addr_v6 = format!("[::1]:{port}");
+            let addr_v4 = format!("127.0.0.1:{port}");
+            let listener_v6 = tokio::net::TcpListener::bind(&addr_v6)
                 .await
-                .context("failed to bind to [::1]:52378")?;
-            let listener_v4 = tokio::net::TcpListener::bind("127.0.0.1:52378")
+                .with_context(|| format!("failed to bind to {addr_v6}"))?;
+            let listener_v4 = tokio::net::TcpListener::bind(&addr_v4)
                 .await
-                .context("failed to bind to 127.0.0.1:52378")?;
-            info!("listening on http://localhost:52378");
+                .with_context(|| format!("failed to bind to {addr_v4}"))?;
+            info!("listening on http://localhost:{port}");
 
             let app_clone = app.clone();
             tokio::spawn(async move {

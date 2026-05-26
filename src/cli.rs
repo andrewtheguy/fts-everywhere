@@ -31,6 +31,10 @@ pub enum Commands {
         /// Profile name to serve
         #[arg(short, long)]
         profile: String,
+
+        /// Port to listen on
+        #[arg(long, default_value_t = 52378)]
+        port: u16,
     },
     /// Index S3 bucket contents into Tantivy
     Index {
