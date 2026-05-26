@@ -11,6 +11,8 @@ use tantivy::{doc, Searcher, Term, TantivyDocument};
 use crate::backend::Backend;
 use crate::search;
 
+const MAX_CONTENT_INDEX_SIZE: u64 = 10 * 1024 * 1024;
+
 const TEXT_EXTENSIONS: &[&str] = &[
     "txt", "md", "markdown", "rst", "json", "jsonc", "jsonl", "ndjson", "csv", "tsv", "log",
     "xml", "html", "htm", "yml", "yaml", "toml", "ini", "conf", "cfg", "env", "css", "scss",
@@ -206,6 +208,7 @@ pub async fn run_indexer(
     let mut unchanged = 0usize;
     let mut removed = 0usize;
     let mut failed = 0usize;
+    let mut skipped_large = 0usize;
     let mut seen_keys = HashSet::new();
     let mut failed_keys = HashSet::new();
 
@@ -239,8 +242,13 @@ pub async fn run_indexer(
             }
         };
 
-        if !is_text {
-            debug!("indexing (filename only): {key}");
+        if !is_text || size > MAX_CONTENT_INDEX_SIZE {
+            if is_text {
+                debug!("skipping content (file too large: {size} bytes): {key}");
+                skipped_large += 1;
+            } else {
+                debug!("indexing (filename only): {key}");
+            }
             writer.delete_term(Term::from_field_text(search_schema.key_raw, key));
             writer.add_document(doc!(
                 search_schema.key => key.as_str(),
@@ -301,10 +309,11 @@ pub async fn run_indexer(
     }
 
     writer.commit()?;
-    let total = indexed + indexed_filename_only + unchanged + failed;
+    let total = indexed + indexed_filename_only + unchanged + failed + skipped_large;
     info!("done: {total} files total");
     info!("  indexed (full):       {indexed}");
     info!("  indexed (filename):   {indexed_filename_only}");
+    info!("  skipped (too large):  {skipped_large}");
     info!("  unchanged:            {unchanged}");
     info!("  removed:              {removed}");
     info!("  failed:               {failed}");
