@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::ops::Range;
+use std::ops::{Bound, Range};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -11,7 +11,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, RegexQuery, TermQuery};
+use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, RangeQuery, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{TantivyDocument, Term};
@@ -174,12 +174,10 @@ pub async fn search(
     };
 
     if let Some(pfx) = params.prefix.as_deref().filter(|p| !p.is_empty()) {
-        let escaped = regex_syntax::escape(pfx);
-        let prefix_query = RegexQuery::from_pattern(&format!("^{escaped}.*"), schema.key_raw)
-            .map_err(|e| AppError::bad_request(format!("invalid prefix: {e}")))?;
+        let prefix_query = key_prefix_query(pfx, schema.key_raw);
         query = Box::new(BooleanQuery::new(vec![
             (Occur::Must, query),
-            (Occur::Must, Box::new(prefix_query)),
+            (Occur::Must, prefix_query),
         ]));
     }
 
@@ -243,6 +241,35 @@ pub async fn search(
 
 const PAGE_LIMIT: usize = 10;
 const MAX_SNIPPET_CHARS: usize = 150;
+
+fn key_prefix_query(prefix: &str, field: Field) -> Box<dyn TantivyQuery> {
+    let lower = Bound::Included(Term::from_field_text(field, prefix));
+    let upper = key_prefix_successor(prefix)
+        .map(|upper| Bound::Excluded(Term::from_field_text(field, &upper)))
+        .unwrap_or(Bound::Unbounded);
+
+    Box::new(RangeQuery::new(lower, upper))
+}
+
+fn key_prefix_successor(prefix: &str) -> Option<String> {
+    for (idx, ch) in prefix.char_indices().rev() {
+        if let Some(next_ch) = next_scalar_value(ch) {
+            let mut successor = prefix[..idx].to_string();
+            successor.push(next_ch);
+            return Some(successor);
+        }
+    }
+    None
+}
+
+fn next_scalar_value(ch: char) -> Option<char> {
+    let next = ch as u32 + 1;
+    match next {
+        0xD800..=0xDFFF => char::from_u32(0xE000),
+        0x110000.. => None,
+        _ => char::from_u32(next),
+    }
+}
 
 fn query_terms_for_field(query: &dyn TantivyQuery, field: Field) -> BTreeSet<String> {
     let mut terms = BTreeSet::new();
@@ -620,6 +647,7 @@ pub async fn browse(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tantivy::doc;
 
     fn jieba_terms(text: &str) -> BTreeSet<String> {
         let mut terms = BTreeSet::new();
@@ -629,6 +657,106 @@ mod tests {
             terms.insert(token.text.to_lowercase());
         }
         terms
+    }
+
+    #[test]
+    fn key_prefix_successor_handles_utf8_boundaries() {
+        assert_eq!(key_prefix_successor("Kilo-Code").as_deref(), Some("Kilo-Codf"));
+        assert_eq!(
+            key_prefix_successor("\u{d7ff}").as_deref(),
+            Some("\u{e000}"),
+        );
+        assert_eq!(key_prefix_successor("\u{10ffff}"), None);
+    }
+
+    #[test]
+    fn key_prefix_query_matches_kilo_code_prefix() {
+        let schema = crate::search::build_schema();
+        let index = tantivy::Index::create_in_ram(schema.schema.clone());
+        crate::search::register_tokenizers(&index);
+        let mut writer = index.writer(15_000_000).unwrap();
+        for key in ["Kilo-Code/doc.txt", "Kilo-Code-notes/doc.txt"] {
+            writer
+                .add_document(doc!(
+                    schema.key => key,
+                    schema.key_raw => key,
+                    schema.content => "DS",
+                    schema.extension => "txt",
+                    schema.size => 0u64,
+                    schema.last_modified => "2026-05-26T00:00:00Z",
+                ))
+                .unwrap();
+        }
+        writer.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        let query = key_prefix_query("Kilo-Code", schema.key_raw);
+        let top_docs = searcher
+            .search(&*query, &TopDocs::with_limit(10).order_by_score())
+            .unwrap();
+        let keys = top_docs
+            .iter()
+            .map(|(_, doc_address)| {
+                let doc: TantivyDocument = searcher.doc(*doc_address).unwrap();
+                doc.get_first(schema.key_raw)
+                    .and_then(|value| value.as_str())
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "Kilo-Code/doc.txt".to_string(),
+                "Kilo-Code-notes/doc.txt".to_string(),
+            ]),
+        );
+    }
+
+    #[test]
+    fn key_prefix_query_does_not_match_prefix_in_middle() {
+        let schema = crate::search::build_schema();
+        let index = tantivy::Index::create_in_ram(schema.schema.clone());
+        crate::search::register_tokenizers(&index);
+        let mut writer = index.writer(15_000_000).unwrap();
+        for key in [
+            "Kilo-Code/doc.txt",
+            "Other/Kilo-Code/doc.txt",
+            "Other/nested/Kilo-Code/doc.txt",
+        ] {
+            writer
+                .add_document(doc!(
+                    schema.key => key,
+                    schema.key_raw => key,
+                    schema.content => "DS",
+                    schema.extension => "txt",
+                    schema.size => 0u64,
+                    schema.last_modified => "2026-05-26T00:00:00Z",
+                ))
+                .unwrap();
+        }
+        writer.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        let query = key_prefix_query("Kilo-Code", schema.key_raw);
+        let top_docs = searcher
+            .search(&*query, &TopDocs::with_limit(10).order_by_score())
+            .unwrap();
+        let keys = top_docs
+            .iter()
+            .map(|(_, doc_address)| {
+                let doc: TantivyDocument = searcher.doc(*doc_address).unwrap();
+                doc.get_first(schema.key_raw)
+                    .and_then(|value| value.as_str())
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(keys, BTreeSet::from(["Kilo-Code/doc.txt".to_string()]));
     }
 
     #[test]
