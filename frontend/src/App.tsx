@@ -1,4 +1,4 @@
-import { ClipboardCopy, Download, X } from "lucide-react";
+import { Check, ClipboardCopy, Download, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -150,12 +150,14 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewFileName, setPreviewFileName] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
 
   function openPreview(key: string) {
     const url = `/api/p/${profileName}/presign?key=${encodeURIComponent(key)}`;
     setPreviewUrl(url);
     setPreviewFileName(key.split("/").pop() || key);
     setPreviewKey(key);
+    setCopyStatus("idle");
   }
 
   const closePreview = useCallback(() => {
@@ -697,11 +699,30 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                   className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
                   onClick={() => {
                     const fullUrl = `${window.location.origin}${previewUrl}&download=true`;
-                    navigator.clipboard.writeText(fullUrl);
+                    navigator.clipboard.writeText(fullUrl).then(
+                      () => {
+                        setCopyStatus("copied");
+                        setTimeout(() => setCopyStatus("idle"), 2000);
+                      },
+                      () => {
+                        setCopyStatus("failed");
+                        setTimeout(() => setCopyStatus("idle"), 2000);
+                      },
+                    );
                   }}
-                  title="Copy URL"
+                  title={
+                    copyStatus === "copied"
+                      ? "Copied!"
+                      : copyStatus === "failed"
+                        ? "Failed to copy"
+                        : "Copy URL"
+                  }
                 >
-                  <ClipboardCopy className="h-4 w-4" />
+                  {copyStatus === "copied" ? (
+                    <Check className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <ClipboardCopy className="h-4 w-4" />
+                  )}
                 </button>
                 <a
                   href={`${previewUrl}&download=true`}
