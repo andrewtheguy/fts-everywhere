@@ -88,6 +88,8 @@ minisearch -c /path/to/config.toml serve --profile my-bucket
 
 Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The server validates S3 connectivity and the search index on startup — if either is unavailable, it fails immediately with a clear error. The home page redirects to `/p/<profile>/browse/` which shows an S3 folder browser with full-text search scoped to the current folder.
 
+The server binds to localhost only (`127.0.0.1` and `[::1]`) and is not accessible from other machines. Use `--port` to change the port (default: 52378). To expose it externally, put it behind a reverse proxy.
+
 ## Development
 
 Start the backend and frontend dev server in separate terminals:
