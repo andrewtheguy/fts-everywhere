@@ -96,6 +96,83 @@ fn is_text_content_type(content_type: &str) -> bool {
     content_type.starts_with("text/") || TEXT_APP_TYPES.contains(&content_type.as_str())
 }
 
+const BUCKET_ID_MARKER: &str = ".minisearch-bucketid";
+
+fn check_bucket_id(
+    state_exists: bool,
+    local_id: Option<&str>,
+    remote_id: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    match (state_exists, local_id, remote_id) {
+        (false, _, None) | (true, None, None) => Ok(None),
+        (false, _, Some(id)) | (true, None, Some(id)) => Ok(Some(id.to_string())),
+        (true, Some(local), None) => {
+            anyhow::bail!(
+                "state.json has bucket_id '{local}' but bucket has no {BUCKET_ID_MARKER} marker"
+            );
+        }
+        (true, Some(local), Some(remote)) => {
+            if local == remote {
+                Ok(Some(remote.to_string()))
+            } else {
+                anyhow::bail!(
+                    "bucket ID mismatch: state.json has '{local}' but bucket marker has '{remote}'"
+                );
+            }
+        }
+    }
+}
+
+async fn validate_bucket_id(
+    s3_client: &aws_sdk_s3::Client,
+    bucket_name: &str,
+    work_dir: &Path,
+) -> anyhow::Result<Option<String>> {
+    let state = crate::state::read_state(work_dir).await;
+    let state_exists = state.is_some();
+    let local_id = state.as_ref().and_then(|s| s.bucket_id.as_deref());
+
+    let marker_result = s3_client
+        .get_object()
+        .bucket(bucket_name)
+        .key(BUCKET_ID_MARKER)
+        .send()
+        .await;
+
+    let remote_id: Option<String> = match marker_result {
+        Ok(output) => {
+            let bytes = output.body.collect().await
+                .context("failed to read .minisearch-bucketid body")?;
+            let content = String::from_utf8(bytes.into_bytes().into())
+                .context(".minisearch-bucketid is not valid UTF-8")?;
+            let trimmed = content.trim().to_string();
+            if trimmed.is_empty() {
+                anyhow::bail!(
+                    "bucket marker {BUCKET_ID_MARKER} exists but is empty — \
+                     it must contain a non-empty identifier"
+                );
+            }
+            Some(trimmed)
+        }
+        Err(err) => {
+            let is_no_such_key = err
+                .as_service_error()
+                .is_some_and(|e| e.is_no_such_key());
+            if is_no_such_key {
+                None
+            } else {
+                return Err(err).context("failed to check .minisearch-bucketid on bucket");
+            }
+        }
+    };
+
+    let result = check_bucket_id(state_exists, local_id, remote_id.as_deref())?;
+    if let Some(id) = &result {
+        info!("bucket ID verified: {id}");
+    }
+    Ok(result)
+}
+
 fn lookup_last_modified(
     searcher: &Searcher,
     schema: &search::SearchSchema,
@@ -114,11 +191,12 @@ fn lookup_last_modified(
 pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path) -> anyhow::Result<()> {
     info!("indexing profile: {}", profile.name);
     let s3_client = profile.s3_client().await;
+    let bucket_id = validate_bucket_id(&s3_client, &profile.s3_bucket_name, work_dir).await?;
 
     let search_schema = search::build_schema();
     let index_path = work_dir.join(crate::config::INDEX_DIR);
     let bucket_name = &profile.s3_bucket_name;
-    let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
+    let index = search::open_or_create_index(&index_path, &search_schema.schema).await?;
 
     let lookup_searcher = index.reader().ok().map(|r| r.searcher());
 
@@ -277,8 +355,11 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path
     info!("  removed:              {removed}");
     info!("  failed:               {failed}");
 
-    let state = serde_json::json!({ "last_indexed": chrono::Utc::now().to_rfc3339() });
-    std::fs::write(work_dir.join("state.json"), serde_json::to_string_pretty(&state)?)?;
+    let mut state = serde_json::json!({ "last_indexed": chrono::Utc::now().to_rfc3339() });
+    if let Some(id) = &bucket_id {
+        state["bucket_id"] = serde_json::json!(id);
+    }
+    tokio::fs::write(work_dir.join("state.json"), serde_json::to_string_pretty(&state)?).await?;
 
     Ok(())
 }
@@ -356,11 +437,13 @@ mod tests {
         assert!(!is_text_content_type("application/octet-stream"));
     }
 
-    fn setup_index(keys: &[&str]) -> (tempfile::TempDir, tantivy::Index, search::SearchSchema) {
+    async fn setup_index(keys: &[&str]) -> (tempfile::TempDir, tantivy::Index, search::SearchSchema) {
         let dir = tempfile::tempdir().unwrap();
         let index_path = dir.path().join("index");
         let schema = search::build_schema();
-        let index = search::open_or_create_index(&index_path, &schema.schema).unwrap();
+        let index = search::open_or_create_index(&index_path, &schema.schema)
+            .await
+            .unwrap();
         let mut writer = index.writer(15_000_000).unwrap();
         for key in keys {
             writer
@@ -395,9 +478,9 @@ mod tests {
         keys
     }
 
-    #[test]
-    fn removes_keys_not_seen_in_bucket() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]);
+    #[tokio::test]
+    async fn removes_keys_not_seen_in_bucket() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 
@@ -414,9 +497,9 @@ mod tests {
         assert_eq!(remaining, HashSet::from(["a.txt".to_string()]));
     }
 
-    #[test]
-    fn preserves_failed_keys() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]);
+    #[tokio::test]
+    async fn preserves_failed_keys() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 
@@ -436,9 +519,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_removal_when_all_seen() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]);
+    #[tokio::test]
+    async fn no_removal_when_all_seen() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 
@@ -459,8 +542,48 @@ mod tests {
     }
 
     #[test]
-    fn all_failed_none_removed() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]);
+    fn bucket_id_no_state_no_marker() {
+        assert!(check_bucket_id(false, None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn bucket_id_no_state_with_marker() {
+        let result = check_bucket_id(false, None, Some("abc123")).unwrap();
+        assert_eq!(result.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn bucket_id_state_no_local_no_marker() {
+        assert!(check_bucket_id(true, None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn bucket_id_state_no_local_with_marker() {
+        let result = check_bucket_id(true, None, Some("abc123")).unwrap();
+        assert_eq!(result.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn bucket_id_state_has_local_no_marker() {
+        let err = check_bucket_id(true, Some("abc123"), None).unwrap_err();
+        assert!(err.to_string().contains("has no .minisearch-bucketid marker"));
+    }
+
+    #[test]
+    fn bucket_id_matching() {
+        let result = check_bucket_id(true, Some("abc123"), Some("abc123")).unwrap();
+        assert_eq!(result.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn bucket_id_mismatch() {
+        let err = check_bucket_id(true, Some("abc123"), Some("xyz789")).unwrap_err();
+        assert!(err.to_string().contains("mismatch"));
+    }
+
+    #[tokio::test]
+    async fn all_failed_none_removed() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 
