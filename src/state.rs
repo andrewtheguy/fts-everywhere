@@ -8,6 +8,13 @@ use crate::search::SearchSchema;
 #[derive(serde::Deserialize)]
 pub struct IndexState {
     pub last_indexed: String,
+    pub bucket_id: Option<String>,
+}
+
+pub fn read_state(work_dir: &Path) -> Option<IndexState> {
+    let state_path = work_dir.join("state.json");
+    let contents = std::fs::read_to_string(&state_path).ok()?;
+    serde_json::from_str::<IndexState>(&contents).ok()
 }
 
 pub async fn read_last_indexed(work_dir: &Path) -> String {
