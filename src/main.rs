@@ -89,6 +89,10 @@ async fn main() -> anyhow::Result<()> {
                 .with_context(|| format!("failed to connect to S3 bucket '{}'", profile_config.s3_bucket_name))?;
             info!("S3 connectivity verified for bucket '{}'", profile_config.s3_bucket_name);
 
+            let index_state = state::read_state(&work_dir)
+                .ok_or_else(|| anyhow::anyhow!("state.json not found or not parseable at {work_dir:?} — run `minisearch index --profile {profile_name}` first"))?;
+            info!("last indexed: {}, bucket_id: {:?}", index_state.last_indexed, index_state.bucket_id);
+
             let index = search::open_index(&index_path)
                 .ok_or_else(|| anyhow::anyhow!("search index not found at {index_path:?} — run `minisearch index --profile {profile_name}` first"))?;
             let reader = index.reader().context("failed to create index reader")?;
