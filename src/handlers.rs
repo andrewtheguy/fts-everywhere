@@ -73,7 +73,7 @@ fn get_or_init_search(state: &ProfileState) -> Result<SearchState, AppError> {
     if let Some(s) = guard.as_ref() {
         return Ok(s.clone());
     }
-    let index = search::open_index(&state.index_path).ok_or_else(|| {
+    let index = search::open_index(&state.work_dir.join(crate::config::INDEX_DIR)).ok_or_else(|| {
         AppError::unavailable("search index not available — run `minisearch index` first")
     })?;
     let reader = index

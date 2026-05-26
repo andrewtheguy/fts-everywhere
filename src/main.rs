@@ -46,7 +46,8 @@ async fn main() -> anyhow::Result<()> {
             let mut profiles = Vec::new();
             for profile_config in &config.profiles {
                 let s3_client = profile_config.s3_client().await;
-                let index_path = PathBuf::from(&profile_config.tantivy_index_path);
+                let work_dir = PathBuf::from(&profile_config.work_dir);
+                let index_path = work_dir.join(config::INDEX_DIR);
                 let search = match search::open_index(&index_path) {
                     Some(index) => {
                         let reader = index
@@ -69,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
                     state: ProfileState {
                         s3_client,
                         bucket_name: profile_config.s3_bucket_name.clone(),
-                        index_path,
+                        work_dir,
                         search,
                     },
                 });

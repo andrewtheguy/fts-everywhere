@@ -65,7 +65,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 
 The [Jieba](https://github.com/nickel-org/tantivy-jieba) tokenizer handles both Chinese and English text segmentation.
 
-Each profile's index is stored at the path specified by `tantivy_index_path` in its config entry.
+Each profile's index is stored under `<work_dir>/tantivy_index/`. After a successful indexing run, the indexer writes `<work_dir>/state.json` with a `last_indexed` timestamp.
 
 ### Indexing pipeline
 
@@ -160,7 +160,7 @@ AppState
          └── state: ProfileState
              ├── s3_client: aws_sdk_s3::Client
              ├── bucket_name: String
-             ├── index_path: PathBuf
+             ├── work_dir: PathBuf
              └── search: Arc<RwLock<Option<SearchState>>>
                   └── SearchState
                       ├── reader: IndexReader
@@ -240,7 +240,7 @@ aws_secret_access_key = "..."
 aws_region = "us-east-1"
 aws_endpoint_url = "https://s3.amazonaws.com"
 s3_bucket_name = "my-bucket"
-tantivy_index_path = "./tantivy_index/my-bucket"
+work_dir = "./workdir/my-bucket"
 ```
 
 Profile names must be unique and URL-safe (lowercase letters, digits, hyphens, underscores).

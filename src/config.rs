@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+pub const INDEX_DIR: &str = "tantivy_index";
+
 use anyhow::{bail, Context};
 use aws_sdk_s3::config::Credentials;
 
@@ -13,7 +15,7 @@ pub struct ProfileConfig {
     pub aws_region: String,
     pub aws_endpoint_url: String,
     pub s3_bucket_name: String,
-    pub tantivy_index_path: String,
+    pub work_dir: String,
 }
 
 impl ProfileConfig {
@@ -103,7 +105,7 @@ aws_secret_access_key = "secret"
 aws_region = "us-east-1"
 aws_endpoint_url = "http://localhost:9000"
 s3_bucket_name = "bucket"
-tantivy_index_path = "tmp/test-index-{name}"
+work_dir = "tmp/test-workdir-{name}"
 "#
         )
     }

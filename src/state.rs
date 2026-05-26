@@ -27,7 +27,7 @@ pub struct ProfileEntry {
 pub struct ProfileState {
     pub s3_client: aws_sdk_s3::Client,
     pub bucket_name: String,
-    pub index_path: PathBuf,
+    pub work_dir: PathBuf,
     pub search: Arc<RwLock<Option<SearchState>>>,
 }
 

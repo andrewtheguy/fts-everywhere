@@ -116,7 +116,8 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Resu
     let s3_client = profile.s3_client().await;
 
     let search_schema = search::build_schema();
-    let index_path = PathBuf::from(&profile.tantivy_index_path);
+    let work_dir = PathBuf::from(&profile.work_dir);
+    let index_path = work_dir.join(crate::config::INDEX_DIR);
     let bucket_name = &profile.s3_bucket_name;
     let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
 
@@ -276,6 +277,10 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Resu
     info!("  unchanged:            {unchanged}");
     info!("  removed:              {removed}");
     info!("  failed:               {failed}");
+
+    let state = serde_json::json!({ "last_indexed": chrono::Utc::now().to_rfc3339() });
+    std::fs::write(work_dir.join("state.json"), serde_json::to_string_pretty(&state)?)?;
+
     Ok(())
 }
 

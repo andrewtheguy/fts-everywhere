@@ -51,7 +51,7 @@ bun install
 
 By default, minisearch looks for its config at `~/.config/minisearch/config.toml` (or `$XDG_CONFIG_HOME/minisearch/config.toml`). Override with `-c`/`--config` or the `MINISEARCH_CONFIG` env var.
 
-Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, S3 connection details, and a unique Tantivy index path:
+Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, S3 connection details, and a working directory:
 
 ```toml
 [[profiles]]
@@ -62,10 +62,10 @@ aws_secret_access_key = "your-secret-key"
 aws_region = "us-east-1"
 aws_endpoint_url = "https://your-s3-endpoint.example.com"
 s3_bucket_name = "your-bucket"
-tantivy_index_path = "./tantivy_index/my-bucket"
+work_dir = "./workdir/my-bucket"
 ```
 
-Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The `tantivy_index_path` is used directly as the index directory — ensure each profile has a unique path.
+Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The `work_dir` is the per-profile working directory — the Tantivy search index is stored under `<work_dir>/tantivy_index/` and indexer state (last successful run timestamp) in `<work_dir>/state.json`.
 
 ## Usage
 
