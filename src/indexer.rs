@@ -196,7 +196,7 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path
     let search_schema = search::build_schema();
     let index_path = work_dir.join(crate::config::INDEX_DIR);
     let bucket_name = &profile.s3_bucket_name;
-    let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
+    let index = search::open_or_create_index(&index_path, &search_schema.schema).await?;
 
     let lookup_searcher = index.reader().ok().map(|r| r.searcher());
 
@@ -437,11 +437,13 @@ mod tests {
         assert!(!is_text_content_type("application/octet-stream"));
     }
 
-    fn setup_index(keys: &[&str]) -> (tempfile::TempDir, tantivy::Index, search::SearchSchema) {
+    async fn setup_index(keys: &[&str]) -> (tempfile::TempDir, tantivy::Index, search::SearchSchema) {
         let dir = tempfile::tempdir().unwrap();
         let index_path = dir.path().join("index");
         let schema = search::build_schema();
-        let index = search::open_or_create_index(&index_path, &schema.schema).unwrap();
+        let index = search::open_or_create_index(&index_path, &schema.schema)
+            .await
+            .unwrap();
         let mut writer = index.writer(15_000_000).unwrap();
         for key in keys {
             writer
@@ -476,9 +478,9 @@ mod tests {
         keys
     }
 
-    #[test]
-    fn removes_keys_not_seen_in_bucket() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]);
+    #[tokio::test]
+    async fn removes_keys_not_seen_in_bucket() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 
@@ -495,9 +497,9 @@ mod tests {
         assert_eq!(remaining, HashSet::from(["a.txt".to_string()]));
     }
 
-    #[test]
-    fn preserves_failed_keys() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]);
+    #[tokio::test]
+    async fn preserves_failed_keys() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 
@@ -517,9 +519,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_removal_when_all_seen() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]);
+    #[tokio::test]
+    async fn no_removal_when_all_seen() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 
@@ -579,9 +581,9 @@ mod tests {
         assert!(err.to_string().contains("mismatch"));
     }
 
-    #[test]
-    fn all_failed_none_removed() {
-        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]);
+    #[tokio::test]
+    async fn all_failed_none_removed() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]).await;
         let reader = index.reader().unwrap();
         let searcher = reader.searcher();
 

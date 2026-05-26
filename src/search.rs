@@ -49,7 +49,7 @@ pub fn register_tokenizers(index: &Index) {
         .register(JIEBA_TOKENIZER_NAME, tantivy_jieba::JiebaTokenizer::new());
 }
 
-pub fn open_or_create_index(path: &Path, schema: &Schema) -> anyhow::Result<Index> {
+pub async fn open_or_create_index(path: &Path, schema: &Schema) -> anyhow::Result<Index> {
     let index = if path.exists() {
         let index = Index::open_in_dir(path).context("failed to open existing index")?;
         if index.schema() != *schema {
@@ -60,7 +60,9 @@ pub fn open_or_create_index(path: &Path, schema: &Schema) -> anyhow::Result<Inde
         }
         index
     } else {
-        std::fs::create_dir_all(path).context("failed to create index directory")?;
+        tokio::fs::create_dir_all(path)
+            .await
+            .context("failed to create index directory")?;
         Index::create_in_dir(path, schema.clone()).context("failed to create new index")?
     };
     register_tokenizers(&index);
@@ -89,29 +91,31 @@ mod tests {
         assert!(open_index(&missing_path).is_none());
     }
 
-    #[test]
-    fn open_or_create_index_reopens_existing_index() {
+    #[tokio::test]
+    async fn open_or_create_index_reopens_existing_index() {
         let dir = tempfile::tempdir().unwrap();
         let index_path = dir.path().join("index");
         let schema = build_schema();
 
-        let created = open_or_create_index(&index_path, &schema.schema).unwrap();
-        let reopened = open_or_create_index(&index_path, &schema.schema).unwrap();
+        let created = open_or_create_index(&index_path, &schema.schema).await.unwrap();
+        let reopened = open_or_create_index(&index_path, &schema.schema).await.unwrap();
 
         assert_eq!(created.schema(), reopened.schema());
     }
 
-    #[test]
-    fn open_or_create_index_rejects_schema_mismatch() {
+    #[tokio::test]
+    async fn open_or_create_index_rejects_schema_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let index_path = dir.path().join("index");
         let schema = build_schema();
-        open_or_create_index(&index_path, &schema.schema).unwrap();
+        open_or_create_index(&index_path, &schema.schema).await.unwrap();
 
         let mut builder = Schema::builder();
         builder.add_text_field("different", STRING | STORED);
         let mismatched_schema = builder.build();
-        let err = open_or_create_index(&index_path, &mismatched_schema).unwrap_err();
+        let err = open_or_create_index(&index_path, &mismatched_schema)
+            .await
+            .unwrap_err();
 
         assert!(format!("{err:#}").contains("index schema mismatch"));
     }
