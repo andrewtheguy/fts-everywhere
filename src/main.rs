@@ -113,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
             let app = Router::new()
                 .route("/", get(handlers::redirect_to_profile))
+                .route("/api/default-profile", get(handlers::default_profile))
                 .route("/api/health", get(|| async { "ok" }))
                 .route("/api/p/{profile}/info", get(handlers::profile_info))
                 .route("/api/p/{profile}/search", get(handlers::search))

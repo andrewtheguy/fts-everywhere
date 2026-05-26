@@ -77,6 +77,12 @@ pub async fn redirect_to_profile(
     axum::response::Redirect::temporary(&format!("/p/{}/browse/", state.profile.name))
 }
 
+pub async fn default_profile(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "name": state.profile.name }))
+}
+
 #[derive(Serialize)]
 pub struct ProfileInfoResponse {
     pub name: String,

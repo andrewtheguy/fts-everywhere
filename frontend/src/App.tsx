@@ -671,12 +671,28 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   );
 }
 
+function RootRedirect() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    fetch("/api/default-profile")
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<{ name: string }>;
+      })
+      .then((data) => {
+        navigate(`/p/${data.name}/browse/`, { replace: true });
+      })
+      .catch(() => {});
+  }, [navigate]);
+  return null;
+}
+
 function App() {
   return (
     <Routes>
       <Route path="/p/:profileName" element={<Navigate to="browse/" replace />} />
       <Route path="/p/:profileName/browse/*" element={<BrowseViewGuard />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<RootRedirect />} />
     </Routes>
   );
 }
