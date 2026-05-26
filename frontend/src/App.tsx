@@ -364,7 +364,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   }, [previewUrl, closePreview]);
 
   const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
-  const isSearchActive = searchResults !== null;
+  const isSearchActive = searchResults !== null || searching || searchError !== null;
 
   return (
     <div className="px-8 py-8">
@@ -466,7 +466,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
             </Alert>
           )}
 
-          {!searching && !searchError && (
+          {!searching && !searchError && searchResults && (
             <>
               <p className="text-sm text-muted-foreground">
                 {totalCount !== null && totalPages > 1
