@@ -27,7 +27,11 @@ impl WebDavClient {
         if !url.path().ends_with('/') {
             url.set_path(&format!("{}/", url.path()));
         }
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .context("failed to build HTTP client")?;
         Ok(Self {
             client,
             base_url: url,
@@ -135,6 +139,29 @@ impl WebDavClient {
         resp.bytes()
             .await
             .map(|b| b.to_vec())
+            .context("failed to read GET body")
+    }
+
+    pub async fn get_optional(&self, path: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        let url = self.resolve_url(path);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .await
+            .context("GET request failed")?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            bail!("GET returned HTTP {}", resp.status());
+        }
+
+        resp.bytes()
+            .await
+            .map(|b| Some(b.to_vec()))
             .context("failed to read GET body")
     }
 

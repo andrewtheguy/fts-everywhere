@@ -117,7 +117,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [searchParams, setSearchParams] = useSearchParams();
   const [profileDescription, setProfileDescription] = useState<string>("");
   const [lastIndexed, setLastIndexed] = useState<string>("");
-  const [supportsPresign, setSupportsPresign] = useState<boolean>(true);
+  const [supportsPresign, setSupportsPresign] = useState<boolean>(false);
 
   const [folders, setFolders] = useState<BrowseFolder[]>([]);
   const [files, setFiles] = useState<BrowseFile[]>([]);

@@ -188,18 +188,24 @@ impl Backend {
                     }
                 }
             }
-            Backend::WebDav(client) => match client.get(marker_key).await {
-                Ok(bytes) => {
-                    let content =
-                        String::from_utf8(bytes).context("marker is not valid UTF-8")?;
-                    let trimmed = content.trim().to_string();
-                    if trimmed.is_empty() {
-                        anyhow::bail!("marker {marker_key} exists but is empty");
+            Backend::WebDav(client) => {
+                let bytes = client
+                    .get_optional(marker_key)
+                    .await
+                    .with_context(|| format!("failed to check marker '{marker_key}' on WebDAV"))?;
+                match bytes {
+                    Some(bytes) => {
+                        let content =
+                            String::from_utf8(bytes).context("marker is not valid UTF-8")?;
+                        let trimmed = content.trim().to_string();
+                        if trimmed.is_empty() {
+                            anyhow::bail!("marker {marker_key} exists but is empty");
+                        }
+                        Ok(Some(trimmed))
                     }
-                    Ok(Some(trimmed))
+                    None => Ok(None),
                 }
-                Err(_) => Ok(None),
-            },
+            }
         }
     }
 
