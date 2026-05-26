@@ -96,6 +96,7 @@ pub async fn redirect_to_profile(
 pub struct ProfileInfoResponse {
     pub name: String,
     pub description: String,
+    pub last_indexed: String,
 }
 
 pub async fn profile_info(
@@ -105,9 +106,24 @@ pub async fn profile_info(
     let profile = state
         .get_profile(&profile_name)
         .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+
+    let state_path = profile.state.work_dir.join("state.json");
+    let last_indexed = match std::fs::read_to_string(&state_path) {
+        Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
+            Ok(v) => match v["last_indexed"].as_str() {
+                Some(ts) => ts.to_string(),
+                None => "state.json missing 'last_indexed' field".to_string(),
+            },
+            Err(e) => format!("state.json parse error: {e}"),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "not indexed yet".to_string(),
+        Err(e) => format!("failed to read state.json: {e}"),
+    };
+
     Ok(Json(ProfileInfoResponse {
         name: profile.name.clone(),
         description: profile.description.clone(),
+        last_indexed,
     }))
 }
 

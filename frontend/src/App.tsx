@@ -116,6 +116,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [profileDescription, setProfileDescription] = useState<string>("");
+  const [lastIndexed, setLastIndexed] = useState<string>("");
 
   const [folders, setFolders] = useState<BrowseFolder[]>([]);
   const [files, setFiles] = useState<BrowseFile[]>([]);
@@ -202,10 +203,15 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   useEffect(() => {
     fetch(`/api/p/${profileName}/info`)
       .then((res) =>
-        res.ok ? (res.json() as Promise<{ name: string; description: string }>) : null,
+        res.ok
+          ? (res.json() as Promise<{ name: string; description: string; last_indexed: string }>)
+          : null,
       )
       .then((data) => {
-        if (data) setProfileDescription(data.description);
+        if (data) {
+          setProfileDescription(data.description);
+          setLastIndexed(data.last_indexed);
+        }
       });
   }, [profileName]);
 
@@ -318,9 +324,16 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
-      <div className="flex items-baseline gap-3 mb-6">
-        <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
-        {profileDescription && <span className="text-muted-foreground">{profileDescription}</span>}
+      <div className="mb-6">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
+          {profileDescription && (
+            <span className="text-muted-foreground">{profileDescription}</span>
+          )}
+        </div>
+        {lastIndexed && (
+          <p className="text-sm text-muted-foreground mt-1">Last indexed: {lastIndexed}</p>
+        )}
       </div>
 
       <form className="flex gap-2 mb-6" onSubmit={handleSearch}>
