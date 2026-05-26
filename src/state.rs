@@ -24,13 +24,7 @@ pub fn read_last_indexed(work_dir: &Path) -> String {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub profiles: Vec<ProfileEntry>,
-}
-
-impl AppState {
-    pub fn get_profile(&self, name: &str) -> Option<&ProfileEntry> {
-        self.profiles.iter().find(|p| p.name == name)
-    }
+    pub profile: ProfileEntry,
 }
 
 #[derive(Clone)]

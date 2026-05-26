@@ -14,7 +14,7 @@ use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{TantivyDocument, Term};
 
 use crate::error::AppError;
-use crate::state::{AppState, ProfileState, SearchState};
+use crate::state::{AppState, ProfileEntry, ProfileState, SearchState};
 
 #[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -65,11 +65,18 @@ fn get_search(state: &ProfileState) -> SearchState {
     state.search.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+fn get_profile<'a>(state: &'a AppState, name: &str) -> Result<&'a ProfileEntry, AppError> {
+    if state.profile.name == name {
+        Ok(&state.profile)
+    } else {
+        Err(AppError::not_found(format!("profile not found: {name}")))
+    }
+}
+
 pub async fn redirect_to_profile(
     State(state): State<AppState>,
 ) -> axum::response::Redirect {
-    let name = &state.profiles[0].name;
-    axum::response::Redirect::temporary(&format!("/p/{name}/browse/"))
+    axum::response::Redirect::temporary(&format!("/p/{}/browse/", state.profile.name))
 }
 
 #[derive(Serialize)]
@@ -83,9 +90,7 @@ pub async fn profile_info(
     State(state): State<AppState>,
     Path(profile_name): Path<String>,
 ) -> Result<Json<ProfileInfoResponse>, AppError> {
-    let profile = state
-        .get_profile(&profile_name)
-        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    let profile = get_profile(&state, &profile_name)?;
 
     let last_indexed = crate::state::read_last_indexed(&profile.state.work_dir);
 
@@ -101,9 +106,7 @@ pub async fn search(
     Path(profile_name): Path<String>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
-    let profile = state
-        .get_profile(&profile_name)
-        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    let profile = get_profile(&state, &profile_name)?;
 
     let query_str = params
         .q
@@ -484,9 +487,7 @@ pub async fn presign(
     Path(profile_name): Path<String>,
     Query(params): Query<PresignParams>,
 ) -> Result<axum::response::Redirect, AppError> {
-    let profile = state
-        .get_profile(&profile_name)
-        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    let profile = get_profile(&state, &profile_name)?;
 
     let key = params
         .key
@@ -552,9 +553,7 @@ pub async fn browse(
     Path(profile_name): Path<String>,
     Query(params): Query<BrowseParams>,
 ) -> Result<Json<BrowseResponse>, AppError> {
-    let profile = state
-        .get_profile(&profile_name)
-        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    let profile = get_profile(&state, &profile_name)?;
 
     let prefix = params.prefix.unwrap_or_default();
 

@@ -97,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
             info!("search index loaded from {index_path:?}");
 
             let state = AppState {
-                profiles: vec![ProfileEntry {
+                profile: ProfileEntry {
                     name: profile_config.name.clone(),
                     description: profile_config.description.clone(),
                     state: ProfileState {
@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
                         work_dir,
                         search,
                     },
-                }],
+                },
             };
 
             let app = Router::new()
