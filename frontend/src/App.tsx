@@ -146,6 +146,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [ext, setExt] = useState(() => searchParams.get("ext") || "");
   const [extPreset, setExtPreset] = useState(() => matchPreset(searchParams.get("ext") || ""));
   const searchControllerRef = useRef<AbortController | null>(null);
+  const previewControllerRef = useRef<AbortController | null>(null);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [presignUrl, setPresignUrl] = useState<string | null>(null);
@@ -154,14 +155,23 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
 
   async function openPreview(key: string) {
+    previewControllerRef.current?.abort();
+    const controller = new AbortController();
+    previewControllerRef.current = controller;
     const base = `/api/p/${profileName}/presign?key=${encodeURIComponent(key)}`;
     setPresignUrl(base);
     setPreviewFileName(key.split("/").pop() || key);
     setPreviewKey(key);
     setCopyStatus("idle");
-    const resp = await fetch(base);
-    const { url } = await resp.json();
-    setPreviewUrl(url);
+    try {
+      const resp = await fetch(base, { signal: controller.signal });
+      if (!resp.ok) throw new Error(resp.statusText);
+      const { url } = await resp.json();
+      setPreviewUrl(url);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      closePreview();
+    }
   }
 
   const closePreview = useCallback(() => {
@@ -356,7 +366,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   }
 
   useEffect(() => {
-    if (!previewUrl) return;
+    if (!presignUrl) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") closePreview();
     };
@@ -366,7 +376,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
       document.removeEventListener("keydown", handler);
       document.body.style.overflow = "";
     };
-  }, [previewUrl, closePreview]);
+  }, [presignUrl, closePreview]);
 
   const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
   const isSearchActive = searchResults !== null || searching || searchError !== null;
