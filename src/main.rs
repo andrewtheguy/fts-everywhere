@@ -42,6 +42,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Profiles => {
+            for profile in &config.profiles {
+                println!("{}\t{}", profile.name, profile.description);
+            }
+        }
         Commands::Serve => {
             let mut profiles = Vec::new();
             for profile_config in &config.profiles {

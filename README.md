@@ -70,9 +70,12 @@ Profile names must be unique and contain only lowercase letters, digits, hyphens
 
 ## Usage
 
-The binary has two subcommands:
+The binary has three subcommands:
 
 ```bash
+# List configured profiles
+minisearch profiles
+
 # Build the search index for a profile
 minisearch index --profile my-bucket
 

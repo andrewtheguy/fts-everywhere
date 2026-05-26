@@ -38,6 +38,8 @@ pub enum Commands {
         #[arg(long, value_parser = parse_duration)]
         every: Option<Duration>,
     },
+    /// List configured profiles
+    Profiles,
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
