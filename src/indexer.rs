@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Context;
 use log::{debug, info, warn};
@@ -111,12 +111,11 @@ fn lookup_last_modified(
         .map(|s| s.to_string())
 }
 
-pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Result<()> {
+pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path) -> anyhow::Result<()> {
     info!("indexing profile: {}", profile.name);
     let s3_client = profile.s3_client().await;
 
     let search_schema = search::build_schema();
-    let work_dir = PathBuf::from(&profile.work_dir);
     let index_path = work_dir.join(crate::config::INDEX_DIR);
     let bucket_name = &profile.s3_bucket_name;
     let index = search::open_or_create_index(&index_path, &search_schema.schema)?;

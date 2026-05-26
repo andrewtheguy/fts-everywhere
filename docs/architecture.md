@@ -65,7 +65,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 
 The [Jieba](https://github.com/nickel-org/tantivy-jieba) tokenizer handles both Chinese and English text segmentation.
 
-Each profile's index is stored under `<work_dir>/tantivy_index/`. After a successful indexing run, the indexer writes `<work_dir>/state.json` with a `last_indexed` timestamp.
+Each profile's working directory is derived as `<work_dir>/<profile_name>/` (where `work_dir` is the top-level config setting). The Tantivy index is stored under `<work_dir>/<profile_name>/tantivy_index/`. After a successful indexing run, the indexer writes `<work_dir>/<profile_name>/state.json` with a `last_indexed` timestamp.
 
 ### Indexing pipeline
 
@@ -229,9 +229,11 @@ GitHub Actions builds release binaries for:
 
 ### Configuration
 
-All configuration is in a single TOML file with `[[profiles]]` array entries:
+All configuration is in a single TOML file with a top-level `work_dir` and `[[profiles]]` array entries:
 
 ```toml
+work_dir = "./workdir"
+
 [[profiles]]
 name = "my-bucket"
 description = "My S3 bucket files"
@@ -240,10 +242,9 @@ aws_secret_access_key = "..."
 aws_region = "us-east-1"
 aws_endpoint_url = "https://s3.amazonaws.com"
 s3_bucket_name = "my-bucket"
-work_dir = "./workdir/my-bucket"
 ```
 
-Profile names must be unique and URL-safe (lowercase letters, digits, hyphens, underscores).
+Profile names must be unique and URL-safe (lowercase letters, digits, hyphens, underscores). Each profile's working directory is derived as `<work_dir>/<profile_name>/`.
 
 ## Deployment patterns
 

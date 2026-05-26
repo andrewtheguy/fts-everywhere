@@ -7,7 +7,6 @@ mod indexer;
 mod search;
 mod state;
 
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
@@ -31,12 +30,13 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .find(|p| p.name == profile_name)
                 .with_context(|| format!("profile not found: {profile_name}"))?;
-            indexer::run_indexer(profile).await?;
+            let work_dir = config.profile_work_dir(&profile_name);
+            indexer::run_indexer(profile, &work_dir).await?;
             if let Some(interval) = every {
                 loop {
                     info!("next index run in {}s", interval.as_secs());
                     tokio::time::sleep(interval).await;
-                    if let Err(e) = indexer::run_indexer(profile).await {
+                    if let Err(e) = indexer::run_indexer(profile, &work_dir).await {
                         error!("indexer error: {e:#}");
                     }
                 }
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
             let mut profiles = Vec::new();
             for profile_config in &config.profiles {
                 let s3_client = profile_config.s3_client().await;
-                let work_dir = PathBuf::from(&profile_config.work_dir);
+                let work_dir = config.profile_work_dir(&profile_config.name);
                 let index_path = work_dir.join(config::INDEX_DIR);
                 let search = match search::open_index(&index_path) {
                     Some(index) => {
