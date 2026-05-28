@@ -3,7 +3,7 @@ mod backend;
 mod cli;
 mod config;
 mod error;
-mod handlers;
+mod server;
 mod indexer;
 mod search;
 mod state;
@@ -116,14 +116,14 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let app = Router::new()
-                .route("/", get(handlers::redirect_to_profile))
-                .route("/api/default-profile", get(handlers::default_profile))
+                .route("/", get(server::redirect_to_profile))
+                .route("/api/default-profile", get(server::default_profile))
                 .route("/api/health", get(|| async { "ok" }))
-                .route("/api/p/{profile}/info", get(handlers::profile_info))
-                .route("/api/p/{profile}/search", get(handlers::search))
-                .route("/api/p/{profile}/presign", get(handlers::presign))
-                .route("/api/p/{profile}/fetch", get(handlers::fetch))
-                .route("/api/p/{profile}/browse", get(handlers::browse))
+                .route("/api/p/{profile}/info", get(server::profile_info))
+                .route("/api/p/{profile}/search", get(server::search))
+                .route("/api/p/{profile}/presign", get(server::presign))
+                .route("/api/p/{profile}/fetch", get(server::fetch))
+                .route("/api/p/{profile}/browse", get(server::browse))
                 .with_state(state)
                 .fallback(assets::static_handler);
 
