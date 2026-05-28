@@ -52,8 +52,8 @@ pub enum Commands {
         #[arg(short, long)]
         profile: Option<String>,
     },
-    /// Run the server preflight check and exit (for container readiness probes)
-    Check {
+    /// Check the search index is ready to serve, skipping the backend connectivity check (for container readiness probes)
+    CheckIndexReady {
         /// Profile name to check
         #[arg(short, long)]
         profile: String,

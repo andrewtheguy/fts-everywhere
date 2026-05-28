@@ -28,9 +28,14 @@ struct Preflight {
     description: String,
 }
 
-/// Verify a profile is ready to serve: backend connectivity, index state, and a
-/// loadable search index. Shared by `serve` (before binding) and `check`.
-async fn preflight(config: &config::AppConfig, profile_name: &str) -> anyhow::Result<Preflight> {
+/// Verify a profile is ready to serve: backend connectivity (optional), index
+/// state, and a loadable search index. Shared by `serve` (before binding, with
+/// connectivity) and `check-index-ready` (without connectivity).
+async fn preflight(
+    config: &config::AppConfig,
+    profile_name: &str,
+    check_connectivity: bool,
+) -> anyhow::Result<Preflight> {
     let profile_config = config
         .profiles
         .iter()
@@ -41,13 +46,17 @@ async fn preflight(config: &config::AppConfig, profile_name: &str) -> anyhow::Re
     let work_dir = config.profile_work_dir(profile_name);
     let index_path = work_dir.join(config::INDEX_DIR);
 
-    backend.check_connectivity().await
-        .with_context(|| format!("failed to verify {} connectivity", profile_config.backend))?;
-    info!("{} connectivity verified", profile_config.backend);
+    if check_connectivity {
+        backend.check_connectivity().await
+            .with_context(|| format!("failed to verify {} connectivity", profile_config.backend))?;
+        info!("{} connectivity verified", profile_config.backend);
+    }
 
     let index_state = state::read_state(&work_dir).await
         .ok_or_else(|| anyhow::anyhow!("state.json not found or not parseable at {work_dir:?} — run `minisearch index --profile {profile_name}` first"))?;
-    info!("last indexed: {}, bucket_id: {:?}", index_state.last_indexed, index_state.bucket_id);
+    let last_indexed = index_state.last_indexed.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("index build not complete at {work_dir:?} — wait for `minisearch index --profile {profile_name}` to finish"))?;
+    info!("last indexed: {last_indexed}, bucket_id: {:?}", index_state.bucket_id);
 
     let index = search::open_index(&index_path)
         .ok_or_else(|| anyhow::anyhow!("search index not found at {index_path:?} — run `minisearch index --profile {profile_name}` first"))?;
@@ -120,12 +129,12 @@ async fn main() -> anyhow::Result<()> {
                 println!();
             }
         }
-        Commands::Check { profile: profile_name } => {
-            preflight(&config, &profile_name).await?;
+        Commands::CheckIndexReady { profile: profile_name } => {
+            preflight(&config, &profile_name, false).await?;
             println!("ready");
         }
         Commands::Serve { profile: profile_name, bind } => {
-            let pf = preflight(&config, &profile_name).await?;
+            let pf = preflight(&config, &profile_name, true).await?;
 
             let signing_secret: [u8; 32] = rand::rng().random();
 
